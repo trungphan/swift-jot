@@ -22,6 +22,11 @@
     "type": "module"
   },
   "permissions": [
-    "storage"
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "*://*.youtube.com/*"
   ]
 }
