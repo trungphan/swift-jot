@@ -48,14 +48,94 @@ function getTimestampAtPosition(text: string, pos: number): string | null {
   return null;
 }
 
+function cleanYouTubeTitle(rawTitle?: string): string {
+  if (!rawTitle) return '';
+  let title = rawTitle
+    .replace(/^\(\d+\+?\)\s*/, '') // Remove "(1) " or "(99+) " notification badges
+    .replace(/\s*-\s*YouTube$/i, '') // Remove "- YouTube"
+    .replace(/\s*\|\s*YouTube$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Decode common HTML entities if present from meta tags
+  title = title
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+
+  return title;
+}
+
+function extractYouTubeVideoId(rawUrl?: string): string | null {
+  if (!rawUrl) return null;
+  const trimmed = rawUrl.trim();
+  try {
+    const urlStr = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    const url = new URL(urlStr);
+    const host = url.hostname.toLowerCase().replace(/^(www\.|m\.)/, '');
+
+    if (host === 'youtu.be') {
+      const id = url.pathname.slice(1).split('/')[0]?.split('?')[0];
+      if (id && /^[a-zA-Z0-9_-]+$/.test(id)) return id;
+    }
+
+    if (host === 'youtube.com' || host.endsWith('.youtube.com')) {
+      const v = url.searchParams.get('v');
+      if (v && /^[a-zA-Z0-9_-]+$/.test(v)) return v;
+
+      const shortsMatch = url.pathname.match(/^\/shorts\/([a-zA-Z0-9_-]+)/);
+      if (shortsMatch) return shortsMatch[1];
+
+      const liveMatch = url.pathname.match(/^\/live\/([a-zA-Z0-9_-]+)/);
+      if (liveMatch) return liveMatch[1];
+
+      const embedMatch = url.pathname.match(/^\/embed\/([a-zA-Z0-9_-]+)/);
+      if (embedMatch) return embedMatch[1];
+    }
+  } catch {
+    // Fall back to regex parsing
+  }
+
+  const regexMatch = trimmed.match(
+    /(?:youtu\.be\/|youtube\.com\/(?:watch\?[^\s<]*v=|shorts\/|live\/|embed\/))([a-zA-Z0-9_-]{11})/
+  );
+  return regexMatch ? regexMatch[1] : null;
+}
+
+function isYouTubeVideoUrl(url?: string): boolean {
+  return extractYouTubeVideoId(url) !== null;
+}
+
+function getYouTubeUrlAtPosition(text: string, pos: number): string | null {
+  const urlRegex = /(https?:\/\/[^\s<]+|\byoutu\.be\/[^\s<]+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = urlRegex.exec(text)) !== null) {
+    const rawUrl = match[0];
+    const cleanUrl = rawUrl.replace(/[.,;:!?)]+$/, '');
+    const start = match.index;
+    const end = start + cleanUrl.length;
+    if (pos >= start && pos <= end) {
+      if (isYouTubeVideoUrl(cleanUrl)) {
+        return cleanUrl;
+      }
+    }
+  }
+  return null;
+}
+
 function isYouTubeUrl(url?: string): boolean {
   if (!url) return false;
   try {
     const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
     return (
-      parsed.hostname === 'www.youtube.com' ||
-      parsed.hostname === 'youtube.com' ||
-      parsed.hostname === 'm.youtube.com'
+      host === 'www.youtube.com' ||
+      host === 'youtube.com' ||
+      host === 'm.youtube.com' ||
+      host === 'youtu.be' ||
+      host.endsWith('.youtube.com')
     );
   } catch {
     return false;
@@ -92,10 +172,17 @@ function renderSyntaxHighlights(text: string): string {
     '<span class="hl-bold">$1</span>'
   );
 
-  // URLs
+  // URLs: highlight YouTube video URLs in red (youtu.be/<video_id> or full URLs), other links in default link color
   html = html.replace(
-    /(https?:\/\/[^\s<]+)/g,
-    '<span class="hl-link">$1</span>'
+    /(https?:\/\/[^\s<]+|\byoutu\.be\/[^\s<]+)/g,
+    (url) => {
+      const cleanUrl = url.replace(/[.,;:!?)]+$/, '');
+      if (isYouTubeVideoUrl(cleanUrl)) {
+        const trailing = url.slice(cleanUrl.length);
+        return `<mark class="hl-youtube-link">${cleanUrl}</mark>${trailing}`;
+      }
+      return `<span class="hl-link">${url}</span>`;
+    }
   );
 
   if (text.endsWith('\n')) {
@@ -111,6 +198,7 @@ class SwiftJotPopup {
   private saveStatus: HTMLElement;
   private charCountEl: HTMLElement;
   private wordCountEl: HTMLElement;
+  private videoLinkBtn: HTMLButtonElement;
   private timestampBtn: HTMLButtonElement;
   private copyBtn: HTMLButtonElement;
   private clearBtn: HTMLButtonElement;
@@ -129,6 +217,7 @@ class SwiftJotPopup {
     this.saveStatus = document.getElementById('save-status') as HTMLElement;
     this.charCountEl = document.getElementById('char-count') as HTMLElement;
     this.wordCountEl = document.getElementById('word-count') as HTMLElement;
+    this.videoLinkBtn = document.getElementById('video-link-btn') as HTMLButtonElement;
     this.timestampBtn = document.getElementById('timestamp-btn') as HTMLButtonElement;
     this.copyBtn = document.getElementById('copy-btn') as HTMLButtonElement;
     this.clearBtn = document.getElementById('clear-btn') as HTMLButtonElement;
@@ -185,6 +274,10 @@ class SwiftJotPopup {
       }
     });
 
+    this.videoLinkBtn.addEventListener('click', async () => {
+      await this.insertYouTubeVideoUrl();
+    });
+
     this.timestampBtn.addEventListener('click', async () => {
       await this.insertYouTubeTimestamp();
     });
@@ -201,6 +294,9 @@ class SwiftJotPopup {
       if (e.altKey && (e.key === 't' || e.key === 'T')) {
         e.preventDefault();
         this.insertYouTubeTimestamp();
+      } else if (e.altKey && (e.key === 'y' || e.key === 'Y' || e.key === 'l' || e.key === 'L')) {
+        e.preventDefault();
+        this.insertYouTubeVideoUrl();
       }
     });
   }
@@ -209,11 +305,118 @@ class SwiftJotPopup {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (tab && isYouTubeUrl(tab.url)) {
+        this.videoLinkBtn.classList.add('has-youtube');
+        this.videoLinkBtn.title = 'Insert YouTube video link (Alt+Y) • Video detected';
         this.timestampBtn.classList.add('has-youtube');
         this.timestampBtn.title = 'Insert YouTube timestamp (Alt+T) • Video detected';
       }
     } catch (err) {
       console.error('Failed to check YouTube status:', err);
+    }
+  }
+
+  private async insertYouTubeVideoUrl(): Promise<void> {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab || !tab.id) {
+        this.showToast('No active tab found');
+        return;
+      }
+
+      if (!isYouTubeUrl(tab.url)) {
+        this.showToast('Current tab is not YouTube');
+        return;
+      }
+
+      let videoId = extractYouTubeVideoId(tab.url);
+      let videoTitle = cleanYouTubeTitle(tab.title);
+
+      // Query the tab page for accurate player video ID and clean video title
+      try {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: () => {
+            const player = document.querySelector('#movie_player') as any;
+            let id: string | null = null;
+            let title: string | null = null;
+            if (player && typeof player.getVideoData === 'function') {
+              const data = player.getVideoData();
+              id = data?.video_id || null;
+              title = data?.title || null;
+            }
+
+            if (!title) {
+              title =
+                document.querySelector('h1.ytd-watch-metadata yt-formatted-string')?.textContent?.trim() ||
+                document.querySelector('h1.title yt-formatted-string')?.textContent?.trim() ||
+                document.querySelector('h2.ytd-reel-player-header-renderer')?.textContent?.trim() ||
+                document.querySelector('meta[name="title"]')?.getAttribute('content') ||
+                document.querySelector('meta[property="og:title"]')?.getAttribute('content') ||
+                null;
+            }
+
+            const canonical = document.querySelector('link[rel="canonical"]')?.getAttribute('href');
+            return {
+              id,
+              title,
+              canonical,
+              href: window.location.href,
+              docTitle: document.title,
+            };
+          },
+        });
+
+        const pageData = results?.[0]?.result;
+        if (pageData) {
+          if (!videoId && pageData.id) {
+            videoId = pageData.id;
+          }
+          if (!videoId && pageData.canonical) {
+            videoId = extractYouTubeVideoId(pageData.canonical);
+          }
+          if (!videoId && pageData.href) {
+            videoId = extractYouTubeVideoId(pageData.href);
+          }
+
+          if (pageData.title) {
+            videoTitle = cleanYouTubeTitle(pageData.title);
+          } else if (pageData.docTitle && !videoTitle) {
+            videoTitle = cleanYouTubeTitle(pageData.docTitle);
+          }
+        }
+      } catch (scriptErr) {
+        console.error('Failed to query tab video data:', scriptErr);
+      }
+
+      if (!videoId) {
+        this.showToast('No YouTube video detected');
+        return;
+      }
+
+      const shortUrl = `youtu.be/${videoId}`;
+      const textToInsert = videoTitle ? `${shortUrl} ${videoTitle}\n` : `${shortUrl}\n`;
+      this.insertTextAtCursor(textToInsert);
+      this.showToast(`Inserted: ${shortUrl}`);
+    } catch (error) {
+      console.error('Failed to insert YouTube video link:', error);
+      this.showToast('Could not fetch video link');
+    }
+  }
+
+  private async openYouTubeVideo(url: string): Promise<void> {
+    try {
+      const targetUrl = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab && tab.id) {
+        await chrome.tabs.update(tab.id, { url: targetUrl });
+        this.showToast('Loading video in current window...');
+      } else {
+        await chrome.tabs.create({ url: targetUrl });
+        this.showToast('Loading video...');
+      }
+    } catch (error) {
+      console.error('Failed to open YouTube video:', error);
+      this.showToast('Failed to load video');
     }
   }
 
@@ -299,6 +502,19 @@ class SwiftJotPopup {
 
   private async handleTextareaClick(e: MouseEvent): Promise<void> {
     const pos = this.textarea.selectionStart;
+
+    // Check if user Ctrl+clicked (or Cmd+clicked) on a YouTube URL
+    if (e.ctrlKey || e.metaKey) {
+      let ytUrl = getYouTubeUrlAtPosition(this.textarea.value, pos);
+      if (!ytUrl && this.textarea.selectionEnd !== pos) {
+        ytUrl = getYouTubeUrlAtPosition(this.textarea.value, this.textarea.selectionEnd);
+      }
+      if (ytUrl) {
+        await this.openYouTubeVideo(ytUrl);
+        return;
+      }
+    }
+
     const ts = getTimestampAtPosition(this.textarea.value, pos);
     if (ts) {
       this.showQuickJump(ts);

@@ -27,6 +27,7 @@
     "scripting"
   ],
   "host_permissions": [
-    "*://*.youtube.com/*"
+    "*://*.youtube.com/*",
+    "*://youtu.be/*"
   ]
 }

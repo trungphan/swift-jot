@@ -119,17 +119,17 @@ body {
   transform: scale(0.95);
 }
 
-.icon-btn.has-youtube {
+#video-link-btn.has-youtube {
   color: #ef4444;
   position: relative;
 }
 
-.icon-btn.has-youtube:hover {
+#video-link-btn.has-youtube:hover {
   background-color: rgba(239, 68, 68, 0.12);
   color: #dc2626;
 }
 
-.icon-btn.has-youtube::after {
+#video-link-btn.has-youtube::after {
   content: '';
   position: absolute;
   top: 4px;
@@ -139,6 +139,28 @@ body {
   border-radius: 50%;
   background-color: #ef4444;
   box-shadow: 0 0 4px rgba(239, 68, 68, 0.6);
+}
+
+#timestamp-btn.has-youtube {
+  color: #d97706;
+  position: relative;
+}
+
+#timestamp-btn.has-youtube:hover {
+  background-color: rgba(245, 158, 11, 0.12);
+  color: #b45309;
+}
+
+#timestamp-btn.has-youtube::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background-color: #f59e0b;
+  box-shadow: 0 0 4px rgba(245, 158, 11, 0.6);
 }
 
 .timestamp-bar {
@@ -160,9 +182,9 @@ body {
   gap: 6px;
   padding: 4px 10px;
   border-radius: var(--radius-sm);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  background: rgba(239, 68, 68, 0.08);
-  color: #ef4444;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.08);
+  color: #b45309;
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 600;
@@ -171,9 +193,9 @@ body {
 }
 
 .quick-jump-btn:hover {
-  background: rgba(239, 68, 68, 0.16);
-  border-color: #ef4444;
-  color: #dc2626;
+  background: rgba(245, 158, 11, 0.16);
+  border-color: #d97706;
+  color: #92400e;
   transform: translateY(-1px);
 }
 
@@ -186,6 +208,7 @@ body {
     opacity: 0;
     transform: translateY(-2px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -267,9 +290,15 @@ body {
 
 /* Syntax Highlighting Styles */
 .hl-timestamp {
-  color: #ef4444;
-  font-weight: 600;
-  background: rgba(239, 68, 68, 0.12);
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.14);
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.28);
+}
+
+.hl-youtube-link {
+  color: #dc2626;
+  background: rgba(239, 68, 68, 0.10);
   border-radius: 3px;
   box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.25);
 }
@@ -297,7 +326,53 @@ body {
 }
 
 @media (prefers-color-scheme: dark) {
+  #video-link-btn.has-youtube {
+    color: #f87171;
+  }
+
+  #video-link-btn.has-youtube:hover {
+    background-color: rgba(239, 68, 68, 0.2);
+    color: #fca5a5;
+  }
+
+  #video-link-btn.has-youtube::after {
+    background-color: #f87171;
+    box-shadow: 0 0 4px rgba(248, 113, 113, 0.8);
+  }
+
+  #timestamp-btn.has-youtube {
+    color: #fbbf24;
+  }
+
+  #timestamp-btn.has-youtube:hover {
+    background-color: rgba(245, 158, 11, 0.2);
+    color: #fde68a;
+  }
+
+  #timestamp-btn.has-youtube::after {
+    background-color: #fbbf24;
+    box-shadow: 0 0 4px rgba(251, 191, 36, 0.8);
+  }
+
+  .quick-jump-btn {
+    border-color: rgba(245, 158, 11, 0.45);
+    background: rgba(245, 158, 11, 0.16);
+    color: #fbbf24;
+  }
+
+  .quick-jump-btn:hover {
+    background: rgba(245, 158, 11, 0.26);
+    border-color: #fbbf24;
+    color: #fef08a;
+  }
+
   .hl-timestamp {
+    color: #fbbf24;
+    background: rgba(245, 158, 11, 0.22);
+    box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.45);
+  }
+
+  .hl-youtube-link {
     color: #f87171;
     background: rgba(239, 68, 68, 0.22);
     box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.45);
