@@ -141,16 +141,41 @@ body {
   box-shadow: 0 0 4px rgba(239, 68, 68, 0.6);
 }
 
+#facebook-link-btn.has-facebook {
+  color: #1877f2;
+  position: relative;
+}
+
+#facebook-link-btn.has-facebook:hover {
+  background-color: rgba(24, 119, 242, 0.12);
+  color: #166fe5;
+}
+
+#facebook-link-btn.has-facebook::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background-color: #1877f2;
+  box-shadow: 0 0 4px rgba(24, 119, 242, 0.6);
+}
+
+#timestamp-btn.has-media,
 #timestamp-btn.has-youtube {
   color: #d97706;
   position: relative;
 }
 
+#timestamp-btn.has-media:hover,
 #timestamp-btn.has-youtube:hover {
   background-color: rgba(245, 158, 11, 0.12);
   color: #b45309;
 }
 
+#timestamp-btn.has-media::after,
 #timestamp-btn.has-youtube::after {
   content: '';
   position: absolute;
@@ -303,6 +328,13 @@ body {
   box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.25);
 }
 
+.hl-facebook-link {
+  color: #1877f2;
+  background: rgba(24, 119, 242, 0.10);
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px rgba(24, 119, 242, 0.25);
+}
+
 .hl-heading {
   color: var(--accent-color);
   font-weight: 700;
@@ -340,15 +372,32 @@ body {
     box-shadow: 0 0 4px rgba(248, 113, 113, 0.8);
   }
 
+  #facebook-link-btn.has-facebook {
+    color: #60a5fa;
+  }
+
+  #facebook-link-btn.has-facebook:hover {
+    background-color: rgba(24, 119, 242, 0.2);
+    color: #93c5fd;
+  }
+
+  #facebook-link-btn.has-facebook::after {
+    background-color: #60a5fa;
+    box-shadow: 0 0 4px rgba(96, 165, 250, 0.8);
+  }
+
+  #timestamp-btn.has-media,
   #timestamp-btn.has-youtube {
     color: #fbbf24;
   }
 
+  #timestamp-btn.has-media:hover,
   #timestamp-btn.has-youtube:hover {
     background-color: rgba(245, 158, 11, 0.2);
     color: #fde68a;
   }
 
+  #timestamp-btn.has-media::after,
   #timestamp-btn.has-youtube::after {
     background-color: #fbbf24;
     box-shadow: 0 0 4px rgba(251, 191, 36, 0.8);
@@ -376,6 +425,12 @@ body {
     color: #f87171;
     background: rgba(239, 68, 68, 0.22);
     box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.45);
+  }
+
+  .hl-facebook-link {
+    color: #60a5fa;
+    background: rgba(24, 119, 242, 0.20);
+    box-shadow: 0 0 0 1px rgba(24, 119, 242, 0.40);
   }
 
   .hl-code {

@@ -125,6 +125,101 @@ function getYouTubeUrlAtPosition(text: string, pos: number): string | null {
   return null;
 }
 
+function isFacebookUrl(url?: string): boolean {
+  if (!url) return false;
+  const trimmed = url.trim();
+  try {
+    const urlStr = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    const parsed = new URL(urlStr);
+    const host = parsed.hostname.toLowerCase();
+    return (
+      host === 'facebook.com' ||
+      host === 'www.facebook.com' ||
+      host === 'm.facebook.com' ||
+      host === 'web.facebook.com' ||
+      host.endsWith('.facebook.com') ||
+      host === 'fb.watch' ||
+      host.endsWith('.fb.watch')
+    );
+  } catch {
+    return false;
+  }
+}
+
+function cleanFacebookUrl(rawUrl: string): string {
+  try {
+    const urlStr = /^https?:\/\//i.test(rawUrl.trim()) ? rawUrl.trim() : `https://${rawUrl.trim()}`;
+    const url = new URL(urlStr);
+    let host = url.hostname.toLowerCase();
+    if (host.endsWith('facebook.com')) {
+      url.hostname = 'www.facebook.com';
+    }
+    url.protocol = 'https:';
+
+    const trackingParams = [
+      'fbclid', 'ref', 'mibextid', 'rdid', '__tn__', '__cft__',
+      'notif_t', 'notif_id', 'comment_id', 'reply_comment_id',
+      'paipv', 'eav', 'fs', 's', 'checkpoint_src', 'sfnsn',
+      '__xts__', 'set'
+    ];
+    for (const param of trackingParams) {
+      url.searchParams.delete(param);
+    }
+    const keysToDelete: string[] = [];
+    url.searchParams.forEach((_, key) => {
+      if (key.startsWith('__') || key.startsWith('utm_')) {
+        keysToDelete.push(key);
+      }
+    });
+    for (const key of keysToDelete) {
+      url.searchParams.delete(key);
+    }
+
+    // Reel URLs: /reel/<id>, /reels/<id>, /share/r/<id>
+    const reelMatch = url.pathname.match(/\/(?:reel|reels)\/([a-zA-Z0-9_-]+)/);
+    if (reelMatch && reelMatch[1]) {
+      return `https://www.facebook.com/reel/${reelMatch[1]}`;
+    }
+
+    const shareReelMatch = url.pathname.match(/\/share\/r\/([a-zA-Z0-9_-]+)/);
+    if (shareReelMatch && shareReelMatch[1]) {
+      return `https://www.facebook.com/reel/${shareReelMatch[1]}`;
+    }
+
+    // Video URLs: /watch/?v=<id> or /videos/<id>
+    const v = url.searchParams.get('v');
+    if (v && /^\d+$/.test(v)) {
+      return `https://www.facebook.com/watch/?v=${v}`;
+    }
+
+    const videoMatch = url.pathname.match(/\/videos\/([a-zA-Z0-9_-]+)/);
+    if (videoMatch && videoMatch[1]) {
+      return `https://www.facebook.com/watch/?v=${videoMatch[1]}`;
+    }
+
+    return url.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
+function getFacebookUrlAtPosition(text: string, pos: number): string | null {
+  const urlRegex = /(https?:\/\/[^\s<]+|\b(?:facebook\.com|www\.facebook\.com|m\.facebook\.com|fb\.watch)\/[^\s<]+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = urlRegex.exec(text)) !== null) {
+    const rawUrl = match[0];
+    const cleanUrl = rawUrl.replace(/[.,;:!?)]+$/, '');
+    const start = match.index;
+    const end = start + cleanUrl.length;
+    if (pos >= start && pos <= end) {
+      if (isFacebookUrl(cleanUrl)) {
+        return cleanUrl;
+      }
+    }
+  }
+  return null;
+}
+
 function isYouTubeUrl(url?: string): boolean {
   if (!url) return false;
   try {
@@ -172,14 +267,17 @@ function renderSyntaxHighlights(text: string): string {
     '<span class="hl-bold">$1</span>'
   );
 
-  // URLs: highlight YouTube video URLs in red (youtu.be/<video_id> or full URLs), other links in default link color
+  // URLs: highlight YouTube video URLs in red, Facebook URLs in blue, other links in default link color
   html = html.replace(
-    /(https?:\/\/[^\s<]+|\byoutu\.be\/[^\s<]+)/g,
+    /(https?:\/\/[^\s<]+|\b(?:youtu\.be|facebook\.com|www\.facebook\.com|m\.facebook\.com|fb\.watch)\/[^\s<]+)/g,
     (url) => {
       const cleanUrl = url.replace(/[.,;:!?)]+$/, '');
+      const trailing = url.slice(cleanUrl.length);
       if (isYouTubeVideoUrl(cleanUrl)) {
-        const trailing = url.slice(cleanUrl.length);
         return `<mark class="hl-youtube-link">${cleanUrl}</mark>${trailing}`;
+      }
+      if (isFacebookUrl(cleanUrl)) {
+        return `<mark class="hl-facebook-link">${cleanUrl}</mark>${trailing}`;
       }
       return `<span class="hl-link">${url}</span>`;
     }
@@ -199,6 +297,7 @@ class SwiftJotPopup {
   private charCountEl: HTMLElement;
   private wordCountEl: HTMLElement;
   private videoLinkBtn: HTMLButtonElement;
+  private facebookLinkBtn: HTMLButtonElement;
   private timestampBtn: HTMLButtonElement;
   private copyBtn: HTMLButtonElement;
   private clearBtn: HTMLButtonElement;
@@ -218,6 +317,7 @@ class SwiftJotPopup {
     this.charCountEl = document.getElementById('char-count') as HTMLElement;
     this.wordCountEl = document.getElementById('word-count') as HTMLElement;
     this.videoLinkBtn = document.getElementById('video-link-btn') as HTMLButtonElement;
+    this.facebookLinkBtn = document.getElementById('facebook-link-btn') as HTMLButtonElement;
     this.timestampBtn = document.getElementById('timestamp-btn') as HTMLButtonElement;
     this.copyBtn = document.getElementById('copy-btn') as HTMLButtonElement;
     this.clearBtn = document.getElementById('clear-btn') as HTMLButtonElement;
@@ -235,7 +335,7 @@ class SwiftJotPopup {
     this.updateCounters(this.textarea.value);
     this.updateJumpBar(this.textarea.value);
     this.syncHighlights();
-    await this.checkYouTubeStatus();
+    await this.checkActiveMediaStatus();
   }
 
   private async loadNote(): Promise<void> {
@@ -270,7 +370,7 @@ class SwiftJotPopup {
 
     this.quickJumpBtn.addEventListener('click', async () => {
       if (this.activeTimestamp) {
-        await this.seekYouTubeVideo(this.activeTimestamp);
+        await this.seekVideo(this.activeTimestamp);
       }
     });
 
@@ -278,8 +378,12 @@ class SwiftJotPopup {
       await this.insertYouTubeVideoUrl();
     });
 
+    this.facebookLinkBtn.addEventListener('click', async () => {
+      await this.insertFacebookLink();
+    });
+
     this.timestampBtn.addEventListener('click', async () => {
-      await this.insertYouTubeTimestamp();
+      await this.insertTimestamp();
     });
 
     this.copyBtn.addEventListener('click', async () => {
@@ -293,25 +397,42 @@ class SwiftJotPopup {
     document.addEventListener('keydown', (e: KeyboardEvent) => {
       if (e.altKey && (e.key === 't' || e.key === 'T')) {
         e.preventDefault();
-        this.insertYouTubeTimestamp();
+        this.insertTimestamp();
       } else if (e.altKey && (e.key === 'y' || e.key === 'Y' || e.key === 'l' || e.key === 'L')) {
         e.preventDefault();
         this.insertYouTubeVideoUrl();
+      } else if (e.altKey && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault();
+        this.insertFacebookLink();
       }
     });
   }
 
-  private async checkYouTubeStatus(): Promise<void> {
+  private async checkActiveMediaStatus(): Promise<void> {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tab && isYouTubeUrl(tab.url)) {
+      if (!tab) return;
+
+      if (isYouTubeUrl(tab.url)) {
         this.videoLinkBtn.classList.add('has-youtube');
-        this.videoLinkBtn.title = 'Insert YouTube video link (Alt+Y) • Video detected';
-        this.timestampBtn.classList.add('has-youtube');
-        this.timestampBtn.title = 'Insert YouTube timestamp (Alt+T) • Video detected';
+        this.videoLinkBtn.title = 'Insert YouTube video link (Alt+Y) • YouTube video detected';
+        this.timestampBtn.classList.add('has-media');
+        this.timestampBtn.title = 'Insert video timestamp (Alt+T) • YouTube video detected';
+      } else if (isFacebookUrl(tab.url)) {
+        this.facebookLinkBtn.classList.add('has-facebook');
+        const isReel = !!(tab.url && (tab.url.includes('/reel/') || tab.url.includes('/reels/')));
+        if (isReel) {
+          this.facebookLinkBtn.title = 'Insert Facebook reel link (Alt+F) • Facebook reel detected';
+          this.timestampBtn.classList.add('has-media');
+          this.timestampBtn.title = 'Insert video timestamp (Alt+T) • Facebook reel detected';
+        } else {
+          this.facebookLinkBtn.title = 'Insert Facebook link (Alt+F) • Facebook detected';
+          this.timestampBtn.classList.add('has-media');
+          this.timestampBtn.title = 'Insert video timestamp (Alt+T) • Facebook detected';
+        }
       }
     } catch (err) {
-      console.error('Failed to check YouTube status:', err);
+      console.error('Failed to check media status:', err);
     }
   }
 
@@ -420,7 +541,7 @@ class SwiftJotPopup {
     }
   }
 
-  private async insertYouTubeTimestamp(): Promise<void> {
+  private async insertFacebookLink(): Promise<void> {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab || !tab.id) {
@@ -428,22 +549,222 @@ class SwiftJotPopup {
         return;
       }
 
-      if (!isYouTubeUrl(tab.url)) {
-        this.showToast('Current tab is not YouTube');
+      if (!isFacebookUrl(tab.url)) {
+        this.showToast('Current tab is not Facebook');
         return;
       }
 
-      const results = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: () => {
-          const video = (document.querySelector('video.html5-main-video') ||
-            document.querySelector('video')) as HTMLVideoElement | null;
-          if (!video) return null;
-          return video.currentTime;
-        },
-      });
+      let targetUrl = tab.url;
 
-      const currentTime = results?.[0]?.result;
+      try {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: () => {
+            // 1. Check if current page is directly on a reel or has /reel/ in URL
+            const reelPathMatch = window.location.pathname.match(/\/(?:reel|reels)\/([a-zA-Z0-9_-]+)/);
+            if (reelPathMatch && reelPathMatch[1]) {
+              return `https://www.facebook.com/reel/${reelPathMatch[1]}`;
+            }
+
+            // 2. Find active video (Reel, feed, dialog)
+            const videos = Array.from(document.querySelectorAll('video')) as HTMLVideoElement[];
+            let activeVideo: HTMLVideoElement | null = videos.find((v) => !v.paused && v.currentTime > 0) || null;
+            if (!activeVideo && videos.length > 0) {
+              const viewCenterX = window.innerWidth / 2;
+              const viewCenterY = window.innerHeight / 2;
+              let bestScore = -Infinity;
+              for (const v of videos) {
+                const rect = v.getBoundingClientRect();
+                const visibleWidth = Math.max(0, Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0));
+                const visibleHeight = Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0));
+                const visibleArea = visibleWidth * visibleHeight;
+                if (visibleArea <= 0) continue;
+                const distFromCenter = Math.hypot(rect.left + rect.width / 2 - viewCenterX, rect.top + rect.height / 2 - viewCenterY);
+                let score = visibleArea - distFromCenter * 50;
+                if (v.currentTime > 0) score += 50000;
+                if (score > bestScore) {
+                  bestScore = score;
+                  activeVideo = v;
+                }
+              }
+            }
+
+            // 3. Check if active video container has a reel or video anchor
+            if (activeVideo) {
+              let el: HTMLElement | null = activeVideo;
+              while (el && el !== document.body) {
+                const reelAnchor = el.querySelector(
+                  'a[href*="/reel/"], a[href*="/reels/"], a[href*="/share/r/"]'
+                ) as HTMLAnchorElement | null;
+                if (reelAnchor && reelAnchor.href) return reelAnchor.href;
+
+                const videoAnchor = el.querySelector(
+                  'a[href*="/watch/"], a[href*="/videos/"], a[href*="/posts/"], a[href*="permalink.php"], a[href*="story.php"]'
+                ) as HTMLAnchorElement | null;
+                if (videoAnchor && videoAnchor.href) return videoAnchor.href;
+
+                el = el.parentElement;
+              }
+            }
+
+            // 4. Check modal dialog first (theater mode)
+            const dialog = document.querySelector('div[role="dialog"]');
+            if (dialog) {
+              const permalink = dialog.querySelector(
+                'a[href*="/reel/"], a[href*="/reels/"], a[href*="/watch/"], a[href*="/videos/"], a[href*="/posts/"], a[href*="permalink.php"], a[href*="story.php"]'
+              ) as HTMLAnchorElement | null;
+              if (permalink && permalink.href) return permalink.href;
+            }
+
+            // 5. Check visible reel anchors
+            const reelAnchors = Array.from(document.querySelectorAll('a[href*="/reel/"], a[href*="/reels/"]')) as HTMLAnchorElement[];
+            for (const a of reelAnchors) {
+              const rect = a.getBoundingClientRect();
+              if (rect.top >= -200 && rect.top <= window.innerHeight) {
+                return a.href;
+              }
+            }
+
+            // 6. Check most visible post article
+            const articles = Array.from(document.querySelectorAll('div[role="article"]')) as HTMLElement[];
+            for (const art of articles) {
+              const rect = art.getBoundingClientRect();
+              if (rect.top >= -100 && rect.top <= window.innerHeight / 2) {
+                const anchor = art.querySelector(
+                  'a[href*="/posts/"], a[href*="/videos/"], a[href*="/reel/"], a[href*="/watch/"], a[href*="permalink.php"], a[href*="story.php"]'
+                ) as HTMLAnchorElement | null;
+                if (anchor && anchor.href) return anchor.href;
+              }
+            }
+
+            const canonical = document.querySelector('link[rel="canonical"]')?.getAttribute('href');
+            const ogUrl = document.querySelector('meta[property="og:url"]')?.getAttribute('content');
+            return canonical || ogUrl || window.location.href;
+          },
+        });
+
+        const pageUrl = results?.[0]?.result;
+        if (pageUrl && typeof pageUrl === 'string') {
+          targetUrl = pageUrl;
+        }
+      } catch (scriptErr) {
+        console.error('Failed to query Facebook tab data:', scriptErr);
+      }
+
+      if (!targetUrl || targetUrl === 'https://www.facebook.com/' || targetUrl === 'https://www.facebook.com') {
+        this.showToast('No Facebook video or post detected');
+        return;
+      }
+
+      const permanentUrl = cleanFacebookUrl(targetUrl);
+      this.insertTextAtCursor(`${permanentUrl}\n`);
+      this.showToast(`Inserted: ${permanentUrl}`);
+    } catch (error) {
+      console.error('Failed to insert Facebook link:', error);
+      this.showToast('Could not fetch Facebook link');
+    }
+  }
+
+  private async openFacebookUrl(url: string): Promise<void> {
+    try {
+      const targetUrl = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab && tab.id) {
+        await chrome.tabs.update(tab.id, { url: targetUrl });
+        this.showToast('Loading Facebook in current window...');
+      } else {
+        await chrome.tabs.create({ url: targetUrl });
+        this.showToast('Loading Facebook...');
+      }
+    } catch (error) {
+      console.error('Failed to open Facebook URL:', error);
+      this.showToast('Failed to load Facebook URL');
+    }
+  }
+
+  private async insertTimestamp(): Promise<void> {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab || !tab.id) {
+        this.showToast('No active tab found');
+        return;
+      }
+
+      const onYouTube = isYouTubeUrl(tab.url);
+      const onFacebook = isFacebookUrl(tab.url);
+
+      if (!onYouTube && !onFacebook) {
+        this.showToast('Active tab is not YouTube or Facebook');
+        return;
+      }
+
+      let currentTime: number | null = null;
+
+      if (onYouTube) {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: () => {
+            const video = (document.querySelector('video.html5-main-video') ||
+              document.querySelector('video')) as HTMLVideoElement | null;
+            if (!video) return null;
+            return video.currentTime;
+          },
+        });
+        currentTime = results?.[0]?.result ?? null;
+      } else if (onFacebook) {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: () => {
+            const videos = Array.from(document.querySelectorAll('video')) as HTMLVideoElement[];
+            if (videos.length === 0) return null;
+            if (videos.length === 1) return videos[0].currentTime;
+
+            // 1. Any currently playing video
+            const playing = videos.find((v) => !v.paused && v.currentTime > 0);
+            if (playing) return playing.currentTime;
+
+            // 2. Video in dialog/modal if visible
+            const dialogVideo = document.querySelector('div[role="dialog"] video') as HTMLVideoElement | null;
+            if (dialogVideo) {
+              const rect = dialogVideo.getBoundingClientRect();
+              if (rect.width > 50 && rect.height > 50 && rect.bottom > 0 && rect.top < window.innerHeight) {
+                return dialogVideo.currentTime;
+              }
+            }
+
+            // 3. Find video closest to viewport center (handles Reels and feed videos even when paused)
+            const viewCenterX = window.innerWidth / 2;
+            const viewCenterY = window.innerHeight / 2;
+
+            let bestVideo: HTMLVideoElement | null = null;
+            let bestScore = -Infinity;
+
+            for (const v of videos) {
+              const rect = v.getBoundingClientRect();
+              const visibleWidth = Math.max(0, Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0));
+              const visibleHeight = Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0));
+              const visibleArea = visibleWidth * visibleHeight;
+              if (visibleArea <= 0) continue;
+
+              const vidCenterX = rect.left + rect.width / 2;
+              const vidCenterY = rect.top + rect.height / 2;
+              const distFromCenter = Math.hypot(vidCenterX - viewCenterX, vidCenterY - viewCenterY);
+
+              let score = visibleArea - distFromCenter * 50;
+              if (v.currentTime > 0) score += 50000;
+              if (!v.paused) score += 500000;
+
+              if (score > bestScore) {
+                bestScore = score;
+                bestVideo = v;
+              }
+            }
+
+            return bestVideo ? bestVideo.currentTime : (videos[0] ? videos[0].currentTime : null);
+          },
+        });
+        currentTime = results?.[0]?.result ?? null;
+      }
 
       if (typeof currentTime !== 'number' || isNaN(currentTime)) {
         this.showToast('No video found on page');
@@ -454,7 +775,7 @@ class SwiftJotPopup {
       this.insertTextAtCursor(`${formatted} `);
       this.showToast(`Inserted: ${formatted}`);
     } catch (error) {
-      console.error('Failed to fetch YouTube timestamp:', error);
+      console.error('Failed to fetch video timestamp:', error);
       this.showToast('Could not fetch timestamp');
     }
   }
@@ -503,7 +824,7 @@ class SwiftJotPopup {
   private async handleTextareaClick(e: MouseEvent): Promise<void> {
     const pos = this.textarea.selectionStart;
 
-    // Check if user Ctrl+clicked (or Cmd+clicked) on a YouTube URL
+    // Check if user Ctrl+clicked (or Cmd+clicked) on a YouTube or Facebook URL
     if (e.ctrlKey || e.metaKey) {
       let ytUrl = getYouTubeUrlAtPosition(this.textarea.value, pos);
       if (!ytUrl && this.textarea.selectionEnd !== pos) {
@@ -513,6 +834,15 @@ class SwiftJotPopup {
         await this.openYouTubeVideo(ytUrl);
         return;
       }
+
+      let fbUrl = getFacebookUrlAtPosition(this.textarea.value, pos);
+      if (!fbUrl && this.textarea.selectionEnd !== pos) {
+        fbUrl = getFacebookUrlAtPosition(this.textarea.value, this.textarea.selectionEnd);
+      }
+      if (fbUrl) {
+        await this.openFacebookUrl(fbUrl);
+        return;
+      }
     }
 
     const ts = getTimestampAtPosition(this.textarea.value, pos);
@@ -520,7 +850,7 @@ class SwiftJotPopup {
       this.showQuickJump(ts);
       // Only jump if the user does Ctrl+Click (or Cmd+Click) on the timestamp
       if (e.ctrlKey || e.metaKey) {
-        await this.seekYouTubeVideo(ts);
+        await this.seekVideo(ts);
       }
     } else {
       this.checkCursorTimestamp();
@@ -563,7 +893,7 @@ class SwiftJotPopup {
     this.timestampBar.classList.remove('hidden');
   }
 
-  private async seekYouTubeVideo(timestamp: string): Promise<boolean> {
+  private async seekVideo(timestamp: string): Promise<boolean> {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab || !tab.id) {
@@ -571,35 +901,121 @@ class SwiftJotPopup {
         return false;
       }
 
-      if (!isYouTubeUrl(tab.url)) {
-        this.showToast('Active tab is not YouTube');
+      const onYouTube = isYouTubeUrl(tab.url);
+      const onFacebook = isFacebookUrl(tab.url);
+
+      if (!onYouTube && !onFacebook) {
+        this.showToast('Active tab is not YouTube or Facebook');
         return false;
       }
 
       const targetSeconds = parseTimestampToSeconds(timestamp);
 
-      const results = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        args: [targetSeconds],
-        func: (seconds: number) => {
-          const video = (document.querySelector('video.html5-main-video') ||
-            document.querySelector('video')) as HTMLVideoElement | null;
-          if (!video) return false;
-          video.currentTime = seconds;
-          return true;
-        },
-      });
+      if (onYouTube) {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          args: [targetSeconds],
+          func: (seconds: number) => {
+            const video = (document.querySelector('video.html5-main-video') ||
+              document.querySelector('video')) as HTMLVideoElement | null;
+            if (!video) return false;
+            video.currentTime = seconds;
+            return true;
+          },
+        });
 
-      const success = results?.[0]?.result;
-      if (success) {
-        this.showToast(`Jumped video to ${timestamp}`);
-        return true;
-      } else {
-        this.showToast('No video player found');
-        return false;
+        const success = results?.[0]?.result;
+        if (success) {
+          this.showToast(`Jumped video to ${timestamp}`);
+          return true;
+        } else {
+          this.showToast('No video player found');
+          return false;
+        }
+      } else if (onFacebook) {
+        const isReel = !!(tab.url && (tab.url.includes('/reel/') || tab.url.includes('/reels/')));
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          args: [targetSeconds],
+          func: (seconds: number) => {
+            const videos = Array.from(document.querySelectorAll('video')) as HTMLVideoElement[];
+            if (videos.length === 0) return false;
+
+            let target: HTMLVideoElement | null = null;
+
+            if (videos.length === 1) {
+              target = videos[0];
+            } else {
+              // 1. Any currently playing video
+              target = videos.find((v) => !v.paused && v.currentTime > 0) || null;
+
+              // 2. Video in dialog/modal if visible
+              if (!target) {
+                const dialogVideo = document.querySelector('div[role="dialog"] video') as HTMLVideoElement | null;
+                if (dialogVideo) {
+                  const rect = dialogVideo.getBoundingClientRect();
+                  if (rect.width > 50 && rect.height > 50 && rect.bottom > 0 && rect.top < window.innerHeight) {
+                    target = dialogVideo;
+                  }
+                }
+              }
+
+              // 3. Find video closest to viewport center (handles Reels and feed)
+              if (!target) {
+                const viewCenterX = window.innerWidth / 2;
+                const viewCenterY = window.innerHeight / 2;
+                let bestScore = -Infinity;
+
+                for (const v of videos) {
+                  const rect = v.getBoundingClientRect();
+                  const visibleWidth = Math.max(0, Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0));
+                  const visibleHeight = Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0));
+                  const visibleArea = visibleWidth * visibleHeight;
+                  if (visibleArea <= 0) continue;
+
+                  const vidCenterX = rect.left + rect.width / 2;
+                  const vidCenterY = rect.top + rect.height / 2;
+                  const distFromCenter = Math.hypot(vidCenterX - viewCenterX, vidCenterY - viewCenterY);
+
+                  let score = visibleArea - distFromCenter * 50;
+                  if (v.currentTime > 0) score += 50000;
+                  if (!v.paused) score += 500000;
+
+                  if (score > bestScore) {
+                    bestScore = score;
+                    target = v;
+                  }
+                }
+              }
+            }
+
+            if (!target) {
+              target = videos[0] || null;
+            }
+
+            if (!target) return false;
+
+            target.currentTime = seconds;
+            target.dispatchEvent(new Event('seeking', { bubbles: true }));
+            target.dispatchEvent(new Event('seeked', { bubbles: true }));
+            target.dispatchEvent(new Event('timeupdate', { bubbles: true }));
+            return true;
+          },
+        });
+
+        const success = results?.[0]?.result;
+        if (success) {
+          this.showToast(isReel ? `Jumped reel to ${timestamp}` : `Jumped Facebook video to ${timestamp}`);
+          return true;
+        } else {
+          this.showToast(isReel ? 'No reel video found' : 'No Facebook video found');
+          return false;
+        }
       }
+
+      return false;
     } catch (error) {
-      console.error('Failed to seek YouTube video:', error);
+      console.error('Failed to seek video:', error);
       this.showToast('Failed to jump video');
       return false;
     }

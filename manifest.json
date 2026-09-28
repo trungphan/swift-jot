@@ -28,6 +28,9 @@
   ],
   "host_permissions": [
     "*://*.youtube.com/*",
-    "*://youtu.be/*"
+    "*://youtu.be/*",
+    "*://*.facebook.com/*",
+    "*://*.fb.watch/*",
+    "*://fb.watch/*"
   ]
 }
