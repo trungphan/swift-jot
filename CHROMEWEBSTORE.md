@@ -2,8 +2,8 @@
 
 > **Single source of truth** for Chrome Web Store listing metadata, permissions justifications, privacy disclosures, and version history.
 >
-> Last updated: 2026-09-13
-> Current version: 0.1.0
+> Last updated: 2026-10-24
+> Current version: 0.1.1
 
 ---
 
@@ -24,8 +24,10 @@ Swift Jot is a fast, lightweight scratchpad extension designed for quick note-ta
 Key Features:
 - Instant Access: Open your notes with a single click from the extension icon.
 - Real-time Auto-Save: Never lose a thought. Notes are automatically saved to your local browser storage.
-- Interactive YouTube Timestamps: One-click extraction of current video playback time (formatted as HH:MM:SS.mmm).
-- Video Seeking: Jump the video to any timestamp using Ctrl+Click directly in your note, or click the dedicated top jump button.
+- Unified Media Link Insertion: One-click button to insert YouTube, Facebook, or local video/audio file paths together with their titles.
+- Interactive Media Timestamps: One-click extraction of current playback time (formatted as HH:MM:SS.mmm) from YouTube, Facebook, and local video or audio files played in Chrome.
+- Quick Media Seeking & Playback: Jump media to any timestamp using Ctrl+Click directly in your note or via the dedicated jump bar. Ctrl+Click on local media links to open and play them in the current Chrome tab.
+- Draggable Window Resizing: Corner drag buttons on both bottom corners let you expand the popup width and height up to 800×600 with persistent size memory.
 - Word & Character Counters: Live statistics while you write.
 - Quick Clipboard Actions: One-click copying and clearing.
 - Clean, Minimal Design: Distraction-free interface with automatic light and dark mode support.
@@ -39,9 +41,12 @@ Key Features:
 | Permission | Why It's Needed |
 |---|---|
 | `storage` | Required to persist your notes locally across browser sessions using Chrome's local storage API (`chrome.storage.local`). No personal data is sent to external servers. |
-| `activeTab` | Required to detect if the currently active tab is an active YouTube page and provide context-aware timestamp features. |
-| `scripting` | Required to execute a lightweight content query on the active YouTube page to read the current playback time or seek the video player to a clicked timestamp. |
-| `*://*.youtube.com/*` (Host) | Required to query and control video playback status specifically on YouTube video and shorts pages when requested by the user. |
+| `activeTab` | Required to detect if the currently active tab has media playing and provide context-aware timestamp and link features. |
+| `tabs` | Required to read tab URLs and titles to insert media links, and update the active tab to open and play clicked local media files. |
+| `scripting` | Required to execute lightweight content scripts to read playback time, seek video/audio players, and control playback when requested by user actions. |
+| `*://*.youtube.com/*`, `*://youtu.be/*` (Host) | Required to query and control video playback status on YouTube video and shorts pages when requested by the user. |
+| `*://*.facebook.com/*`, `*://*.fb.watch/*`, `*://fb.watch/*` (Host) | Required to detect Facebook video and reel playback and capture/seek timestamps upon user request. |
+| `file:///*` (Host) | Required to query playback position and control playback for local video and audio files opened directly in Chrome when the user enables "Allow access to file URLs". |
 
 ---
 
@@ -54,6 +59,12 @@ Key Features:
 ---
 
 ## 4. Version History
+
+### 0.1.1 — 2026-10-24
+- Unified media link button: Combined YouTube and Facebook insertion into a single button and added support for local video and audio files played in Chrome.
+- Renamed "Insert video timestamp" to "Insert media timestamp" with support for local audio/video, YouTube, and Facebook.
+- Interactive local media playback: Ctrl+Click on a timestamp seeks local media; Ctrl+Click on a local media link opens and plays the file in the current tab.
+- Added syntax highlighting for local media links.
 
 ### 0.1.0 — 2026-09-13
 - Initial release.

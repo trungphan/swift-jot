@@ -24,13 +24,15 @@
   "permissions": [
     "storage",
     "activeTab",
-    "scripting"
+    "scripting",
+    "tabs"
   ],
   "host_permissions": [
     "*://*.youtube.com/*",
     "*://youtu.be/*",
     "*://*.facebook.com/*",
     "*://*.fb.watch/*",
-    "*://fb.watch/*"
+    "*://fb.watch/*",
+    "file:///*"
   ]
 }

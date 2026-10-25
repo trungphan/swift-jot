@@ -1,9 +1,23 @@
+interface PopupSize {
+  width: number;
+  height: number;
+}
+
 interface StorageData {
   swiftJotNote?: string;
+  swiftJotPopupSize?: PopupSize;
 }
 
 const STORAGE_KEY = 'swiftJotNote';
+const POPUP_SIZE_KEY = 'swiftJotPopupSize';
 const DEBOUNCE_DELAY_MS = 300;
+
+const DEFAULT_WIDTH = 380;
+const DEFAULT_HEIGHT = 420;
+const MIN_WIDTH = 340;
+const MAX_WIDTH = 800;
+const MIN_HEIGHT = 280;
+const MAX_HEIGHT = 600;
 
 function formatTimestamp(totalSeconds: number): string {
   const hours = Math.floor(totalSeconds / 3600);
@@ -237,6 +251,89 @@ function isYouTubeUrl(url?: string): boolean {
   }
 }
 
+const MEDIA_EXTENSIONS = /\.(mp4|webm|ogg|ogv|mov|mkv|m4v|avi|wmv|flv|3gp|ts|mp3|wav|m4a|aac|flac|opus|weba|oga|mid|midi|wma)(?:[?#].*)?$/i;
+
+function normalizeToLocalFileUrl(pathOrUrl: string): string {
+  let trimmed = pathOrUrl.trim().replace(/[.,;:!?)]+$/, '');
+  if (trimmed.startsWith('file:///')) {
+    try {
+      return encodeURI(decodeURI(trimmed));
+    } catch {
+      return trimmed;
+    }
+  }
+  if (trimmed.startsWith('file://')) {
+    try {
+      return encodeURI(decodeURI(trimmed.replace(/^file:\/\//, 'file:///')));
+    } catch {
+      return trimmed.replace(/^file:\/\//, 'file:///');
+    }
+  }
+  // Windows drive letter: C:\path or C:/path
+  if (/^[a-zA-Z]:[/\\]/.test(trimmed)) {
+    const normalizedPath = trimmed.replace(/\\/g, '/');
+    try {
+      return `file:///${encodeURI(decodeURI(normalizedPath))}`;
+    } catch {
+      return `file:///${normalizedPath}`;
+    }
+  }
+  // Unix path: /Users/... or /home/...
+  if (trimmed.startsWith('/')) {
+    try {
+      return `file://${encodeURI(decodeURI(trimmed))}`;
+    } catch {
+      return `file://${trimmed}`;
+    }
+  }
+  return trimmed;
+}
+
+function isLocalMediaUrl(urlOrPath?: string): boolean {
+  if (!urlOrPath) return false;
+  const trimmed = urlOrPath.trim();
+  if (trimmed.startsWith('file://')) {
+    return true;
+  }
+  if (/^[a-zA-Z]:[/\\]/.test(trimmed) && MEDIA_EXTENSIONS.test(trimmed)) {
+    return true;
+  }
+  if (trimmed.startsWith('/') && MEDIA_EXTENSIONS.test(trimmed)) {
+    return true;
+  }
+  return false;
+}
+
+function getLocalMediaUrlAtPosition(text: string, pos: number): string | null {
+  // 1. file:/// links (with or without %20)
+  const fileUrlRegex = /file:\/\/\/[^\s<"']+/gi;
+  let match: RegExpExecArray | null;
+  while ((match = fileUrlRegex.exec(text)) !== null) {
+    const rawUrl = match[0];
+    const cleanUrl = rawUrl.replace(/[.,;:!?)]+$/, '');
+    const start = match.index;
+    const end = start + cleanUrl.length;
+    if (pos >= start && pos <= end) {
+      return cleanUrl;
+    }
+  }
+
+  // 2. Windows drive paths or Unix paths with media extensions
+  const pathRegex =
+    /(?:^|[\s"'(])([a-zA-Z]:[\\/][^\s<"']+\.(?:mp4|webm|ogg|ogv|mov|mkv|m4v|avi|wmv|flv|3gp|ts|mp3|wav|m4a|aac|flac|opus|weba|oga|mid|midi|wma)|\/(?:Users|home|[a-zA-Z0-9_.-]+)\/[^\s<"']+\.(?:mp4|webm|ogg|ogv|mov|mkv|m4v|avi|wmv|flv|3gp|ts|mp3|wav|m4a|aac|flac|opus|weba|oga|mid|midi|wma))/gi;
+  while ((match = pathRegex.exec(text)) !== null) {
+    const rawPath = match[1];
+    const cleanPath = rawPath.replace(/[.,;:!?)]+$/, '');
+    const start = match.index + (match[0].length - match[1].length);
+    const end = start + cleanPath.length;
+    if (pos >= start && pos <= end) {
+      return cleanPath;
+    }
+  }
+
+  return null;
+}
+
 function renderSyntaxHighlights(text: string): string {
   let html = text
     .replace(/&/g, '&amp;')
@@ -267,9 +364,9 @@ function renderSyntaxHighlights(text: string): string {
     '<span class="hl-bold">$1</span>'
   );
 
-  // URLs: highlight YouTube video URLs in red, Facebook URLs in blue, other links in default link color
+  // URLs & local media paths
   html = html.replace(
-    /(https?:\/\/[^\s<]+|\b(?:youtu\.be|facebook\.com|www\.facebook\.com|m\.facebook\.com|fb\.watch)\/[^\s<]+)/g,
+    /(file:\/\/\/[^\s<]+|https?:\/\/[^\s<]+|\b(?:youtu\.be|facebook\.com|www\.facebook\.com|m\.facebook\.com|fb\.watch)\/[^\s<]+|[a-zA-Z]:[\\/][^\s<"']+\.(?:mp4|webm|ogg|ogv|mov|mkv|m4v|avi|wmv|flv|3gp|ts|mp3|wav|m4a|aac|flac|opus|weba|oga|mid|midi|wma))/gi,
     (url) => {
       const cleanUrl = url.replace(/[.,;:!?)]+$/, '');
       const trailing = url.slice(cleanUrl.length);
@@ -278,6 +375,9 @@ function renderSyntaxHighlights(text: string): string {
       }
       if (isFacebookUrl(cleanUrl)) {
         return `<mark class="hl-facebook-link">${cleanUrl}</mark>${trailing}`;
+      }
+      if (isLocalMediaUrl(cleanUrl)) {
+        return `<mark class="hl-local-media-link">${cleanUrl}</mark>${trailing}`;
       }
       return `<span class="hl-link">${url}</span>`;
     }
@@ -296,8 +396,7 @@ class SwiftJotPopup {
   private saveStatus: HTMLElement;
   private charCountEl: HTMLElement;
   private wordCountEl: HTMLElement;
-  private videoLinkBtn: HTMLButtonElement;
-  private facebookLinkBtn: HTMLButtonElement;
+  private mediaLinkBtn: HTMLButtonElement;
   private timestampBtn: HTMLButtonElement;
   private copyBtn: HTMLButtonElement;
   private clearBtn: HTMLButtonElement;
@@ -305,6 +404,8 @@ class SwiftJotPopup {
   private timestampBar: HTMLElement;
   private quickJumpBtn: HTMLButtonElement;
   private quickJumpText: HTMLElement;
+  private resizeHandleLeft: HTMLButtonElement;
+  private resizeHandleRight: HTMLButtonElement;
 
   private activeTimestamp: string | null = null;
   private saveTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -316,8 +417,7 @@ class SwiftJotPopup {
     this.saveStatus = document.getElementById('save-status') as HTMLElement;
     this.charCountEl = document.getElementById('char-count') as HTMLElement;
     this.wordCountEl = document.getElementById('word-count') as HTMLElement;
-    this.videoLinkBtn = document.getElementById('video-link-btn') as HTMLButtonElement;
-    this.facebookLinkBtn = document.getElementById('facebook-link-btn') as HTMLButtonElement;
+    this.mediaLinkBtn = document.getElementById('media-link-btn') as HTMLButtonElement;
     this.timestampBtn = document.getElementById('timestamp-btn') as HTMLButtonElement;
     this.copyBtn = document.getElementById('copy-btn') as HTMLButtonElement;
     this.clearBtn = document.getElementById('clear-btn') as HTMLButtonElement;
@@ -325,17 +425,124 @@ class SwiftJotPopup {
     this.timestampBar = document.getElementById('timestamp-bar') as HTMLElement;
     this.quickJumpBtn = document.getElementById('quick-jump-btn') as HTMLButtonElement;
     this.quickJumpText = document.getElementById('quick-jump-text') as HTMLElement;
+    this.resizeHandleLeft = document.getElementById('resize-handle-left') as HTMLButtonElement;
+    this.resizeHandleRight = document.getElementById('resize-handle-right') as HTMLButtonElement;
 
     this.init();
   }
 
   private async init(): Promise<void> {
+    await this.loadPopupSize();
     await this.loadNote();
     this.bindEvents();
+    this.setupResizeHandles();
     this.updateCounters(this.textarea.value);
     this.updateJumpBar(this.textarea.value);
     this.syncHighlights();
     await this.checkActiveMediaStatus();
+  }
+
+  private async loadPopupSize(): Promise<void> {
+    try {
+      const data = (await chrome.storage.local.get(POPUP_SIZE_KEY)) as StorageData;
+      const size = data?.swiftJotPopupSize;
+      if (size && typeof size.width === 'number' && typeof size.height === 'number') {
+        const w = Math.min(Math.max(size.width, MIN_WIDTH), MAX_WIDTH);
+        const h = Math.min(Math.max(size.height, MIN_HEIGHT), MAX_HEIGHT);
+        document.body.style.width = `${w}px`;
+        document.body.style.height = `${h}px`;
+      }
+    } catch (err) {
+      console.error('Failed to load popup size:', err);
+    }
+  }
+
+  private async savePopupSize(width: number, height: number): Promise<void> {
+    try {
+      await chrome.storage.local.set({ [POPUP_SIZE_KEY]: { width, height } });
+    } catch (err) {
+      console.error('Failed to save popup size:', err);
+    }
+  }
+
+  private setupResizeHandles(): void {
+    this.setupSingleResizeHandle(this.resizeHandleRight, 'right');
+    this.setupSingleResizeHandle(this.resizeHandleLeft, 'left');
+
+    const resetToDefault = async () => {
+      document.body.style.width = `${DEFAULT_WIDTH}px`;
+      document.body.style.height = `${DEFAULT_HEIGHT}px`;
+      await this.savePopupSize(DEFAULT_WIDTH, DEFAULT_HEIGHT);
+      this.syncHighlights();
+      this.showToast('Reset window to default size');
+    };
+
+    this.resizeHandleLeft.addEventListener('dblclick', resetToDefault);
+    this.resizeHandleRight.addEventListener('dblclick', resetToDefault);
+  }
+
+  private setupSingleResizeHandle(handle: HTMLButtonElement, side: 'left' | 'right'): void {
+    let isDragging = false;
+    let startX = 0;
+    let startY = 0;
+    let startWidth = 0;
+    let startHeight = 0;
+    let currentWidth = DEFAULT_WIDTH;
+    let currentHeight = DEFAULT_HEIGHT;
+
+    handle.addEventListener('pointerdown', (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      isDragging = true;
+      try {
+        handle.setPointerCapture(e.pointerId);
+      } catch {
+        // Fallback if pointer capture is unsupported
+      }
+      handle.classList.add('resizing');
+      document.body.style.userSelect = 'none';
+
+      startX = e.clientX;
+      startY = e.clientY;
+      startWidth = document.body.offsetWidth || window.innerWidth;
+      startHeight = document.body.offsetHeight || window.innerHeight;
+      currentWidth = startWidth;
+      currentHeight = startHeight;
+    });
+
+    handle.addEventListener('pointermove', (e: PointerEvent) => {
+      if (!isDragging) return;
+      e.preventDefault();
+
+      const deltaX = side === 'right' ? e.clientX - startX : startX - e.clientX;
+      const deltaY = e.clientY - startY;
+
+      currentWidth = Math.min(Math.max(startWidth + deltaX, MIN_WIDTH), MAX_WIDTH);
+      currentHeight = Math.min(Math.max(startHeight + deltaY, MIN_HEIGHT), MAX_HEIGHT);
+
+      document.body.style.width = `${currentWidth}px`;
+      document.body.style.height = `${currentHeight}px`;
+
+      this.syncHighlights();
+    });
+
+    const stopResize = async (e: PointerEvent) => {
+      if (!isDragging) return;
+      isDragging = false;
+      try {
+        handle.releasePointerCapture(e.pointerId);
+      } catch {
+        // Ignore
+      }
+      handle.classList.remove('resizing');
+      document.body.style.userSelect = '';
+
+      await this.savePopupSize(currentWidth, currentHeight);
+      this.syncHighlights();
+    };
+
+    handle.addEventListener('pointerup', stopResize);
+    handle.addEventListener('pointercancel', stopResize);
   }
 
   private async loadNote(): Promise<void> {
@@ -374,12 +581,8 @@ class SwiftJotPopup {
       }
     });
 
-    this.videoLinkBtn.addEventListener('click', async () => {
-      await this.insertYouTubeVideoUrl();
-    });
-
-    this.facebookLinkBtn.addEventListener('click', async () => {
-      await this.insertFacebookLink();
+    this.mediaLinkBtn.addEventListener('click', async () => {
+      await this.insertMediaLink();
     });
 
     this.timestampBtn.addEventListener('click', async () => {
@@ -398,12 +601,19 @@ class SwiftJotPopup {
       if (e.altKey && (e.key === 't' || e.key === 'T')) {
         e.preventDefault();
         this.insertTimestamp();
-      } else if (e.altKey && (e.key === 'y' || e.key === 'Y' || e.key === 'l' || e.key === 'L')) {
+      } else if (
+        e.altKey &&
+        (e.key === 'm' ||
+          e.key === 'M' ||
+          e.key === 'y' ||
+          e.key === 'Y' ||
+          e.key === 'l' ||
+          e.key === 'L' ||
+          e.key === 'f' ||
+          e.key === 'F')
+      ) {
         e.preventDefault();
-        this.insertYouTubeVideoUrl();
-      } else if (e.altKey && (e.key === 'f' || e.key === 'F')) {
-        e.preventDefault();
-        this.insertFacebookLink();
+        this.insertMediaLink();
       }
     });
   }
@@ -413,26 +623,229 @@ class SwiftJotPopup {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab) return;
 
+      this.mediaLinkBtn.classList.remove('has-youtube', 'has-facebook', 'has-local-media', 'has-media');
+      this.timestampBtn.classList.remove('has-media', 'has-youtube');
+
       if (isYouTubeUrl(tab.url)) {
-        this.videoLinkBtn.classList.add('has-youtube');
-        this.videoLinkBtn.title = 'Insert YouTube video link (Alt+Y) • YouTube video detected';
+        this.mediaLinkBtn.classList.add('has-youtube');
+        this.mediaLinkBtn.title = 'Insert media link (Alt+M) • YouTube video detected';
         this.timestampBtn.classList.add('has-media');
-        this.timestampBtn.title = 'Insert video timestamp (Alt+T) • YouTube video detected';
+        this.timestampBtn.title = 'Insert media timestamp (Alt+T) • YouTube video detected';
       } else if (isFacebookUrl(tab.url)) {
-        this.facebookLinkBtn.classList.add('has-facebook');
+        this.mediaLinkBtn.classList.add('has-facebook');
         const isReel = !!(tab.url && (tab.url.includes('/reel/') || tab.url.includes('/reels/')));
         if (isReel) {
-          this.facebookLinkBtn.title = 'Insert Facebook reel link (Alt+F) • Facebook reel detected';
+          this.mediaLinkBtn.title = 'Insert media link (Alt+M) • Facebook reel detected';
           this.timestampBtn.classList.add('has-media');
-          this.timestampBtn.title = 'Insert video timestamp (Alt+T) • Facebook reel detected';
+          this.timestampBtn.title = 'Insert media timestamp (Alt+T) • Facebook reel detected';
         } else {
-          this.facebookLinkBtn.title = 'Insert Facebook link (Alt+F) • Facebook detected';
+          this.mediaLinkBtn.title = 'Insert media link (Alt+M) • Facebook video detected';
           this.timestampBtn.classList.add('has-media');
-          this.timestampBtn.title = 'Insert video timestamp (Alt+T) • Facebook detected';
+          this.timestampBtn.title = 'Insert media timestamp (Alt+T) • Facebook video detected';
         }
+      } else if (tab.url?.startsWith('file://')) {
+        this.mediaLinkBtn.classList.add('has-local-media');
+        this.mediaLinkBtn.title = 'Insert media link (Alt+M) • Local media detected';
+        this.timestampBtn.classList.add('has-media');
+        this.timestampBtn.title = 'Insert media timestamp (Alt+T) • Local media detected';
+      } else if (tab.id) {
+        try {
+          const results = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: () => {
+              return !!document.querySelector('video, audio');
+            },
+          });
+          if (results?.[0]?.result) {
+            this.mediaLinkBtn.classList.add('has-local-media');
+            this.mediaLinkBtn.title = 'Insert media link (Alt+M) • Media player detected';
+            this.timestampBtn.classList.add('has-media');
+            this.timestampBtn.title = 'Insert media timestamp (Alt+T) • Media player detected';
+          } else {
+            this.mediaLinkBtn.title = 'Insert media link (Alt+M)';
+            this.timestampBtn.title = 'Insert media timestamp (Alt+T)';
+          }
+        } catch {
+          this.mediaLinkBtn.title = 'Insert media link (Alt+M)';
+          this.timestampBtn.title = 'Insert media timestamp (Alt+T)';
+        }
+      } else {
+        this.mediaLinkBtn.title = 'Insert media link (Alt+M)';
+        this.timestampBtn.title = 'Insert media timestamp (Alt+T)';
       }
     } catch (err) {
       console.error('Failed to check media status:', err);
+    }
+  }
+
+  private async insertMediaLink(): Promise<void> {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab || !tab.id) {
+        this.showToast('No active tab found');
+        return;
+      }
+
+      if (isYouTubeUrl(tab.url)) {
+        await this.insertYouTubeVideoUrl();
+        return;
+      }
+
+      if (isFacebookUrl(tab.url)) {
+        await this.insertFacebookLink();
+        return;
+      }
+
+      if (tab.url?.startsWith('file://')) {
+        await this.insertLocalMediaLink(tab);
+        return;
+      }
+
+      // Check if page contains video or audio element
+      try {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: () => {
+            const media = (document.querySelector('video') ||
+              document.querySelector('audio')) as HTMLMediaElement | null;
+            if (!media) return null;
+            const src = media.currentSrc || media.src || window.location.href;
+            return {
+              src,
+              title: document.title,
+            };
+          },
+        });
+
+        const info = results?.[0]?.result;
+        if (info && info.src) {
+          if (info.src.startsWith('file://')) {
+            await this.insertLocalMediaLink({
+              ...tab,
+              url: info.src,
+              title: info.title || tab.title,
+            });
+            return;
+          }
+
+          const title = (info.title || tab.title || '').replace(/\s*-\s*Google Chrome$/i, '').trim();
+          const textToInsert = title ? `${info.src} ${title}\n` : `${info.src}\n`;
+          this.insertTextAtCursor(textToInsert);
+          this.showToast('Inserted media link');
+          return;
+        }
+      } catch {
+        // Scripting not permitted or failed
+      }
+
+      this.showToast('No media detected in current tab');
+    } catch (error) {
+      console.error('Failed to insert media link:', error);
+      this.showToast('Could not fetch media link');
+    }
+  }
+
+  private async insertLocalMediaLink(tab: chrome.tabs.Tab): Promise<void> {
+    try {
+      const filePath = tab.url || '';
+      let title = (tab.title || '').replace(/\s*-\s*Google Chrome$/i, '').trim();
+
+      if (!title) {
+        try {
+          const pathname = new URL(filePath).pathname;
+          const decoded = decodeURIComponent(pathname);
+          const parts = decoded.split('/');
+          title = parts[parts.length - 1] || '';
+        } catch {
+          const parts = decodeURIComponent(filePath).split('/');
+          title = parts[parts.length - 1] || '';
+        }
+      }
+
+      const textToInsert = title ? `${filePath} ${title}\n` : `${filePath}\n`;
+      this.insertTextAtCursor(textToInsert);
+      this.showToast(`Inserted: ${title || filePath}`);
+    } catch (error) {
+      console.error('Failed to insert local media link:', error);
+      this.showToast('Could not insert local media link');
+    }
+  }
+
+  private async openLocalMedia(rawUrlOrPath: string): Promise<void> {
+    try {
+      const targetUrl = normalizeToLocalFileUrl(rawUrlOrPath);
+
+      // Check if user allowed file scheme access
+      const isAllowed = await chrome.extension.isAllowedFileSchemeAccess().catch(() => false);
+      if (!isAllowed) {
+        this.showToast('Please enable "Allow access to file URLs" in chrome://extensions');
+      }
+
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab || !tab.id) {
+        await chrome.tabs.create({ url: targetUrl });
+        this.showToast('Opening media in new tab...');
+        return;
+      }
+
+      const tabId = tab.id;
+      const currentDecoded = decodeURI(tab.url || '');
+      const targetDecoded = decodeURI(targetUrl);
+
+      if (currentDecoded === targetDecoded) {
+        // Current tab is already at this media URL: play it directly
+        await chrome.scripting
+          .executeScript({
+            target: { tabId },
+            func: () => {
+              const media = (document.querySelector('video') ||
+                document.querySelector('audio')) as HTMLMediaElement | null;
+              if (media) {
+                media.play().catch(() => {});
+              }
+            },
+          })
+          .catch(() => {});
+        this.showToast('Playing media in current tab...');
+        return;
+      }
+
+      // Notify service worker to auto-play once navigation completes
+      try {
+        await chrome.runtime.sendMessage({
+          type: 'ENSURE_PLAY_ON_LOAD',
+          tabId,
+        });
+      } catch {
+        // SW listener fallback
+      }
+
+      // Also listen in popup if still alive
+      const playListener = (updatedTabId: number, changeInfo: chrome.tabs.OnUpdatedInfo) => {
+        if (updatedTabId === tabId && changeInfo.status === 'complete') {
+          chrome.tabs.onUpdated.removeListener(playListener);
+          chrome.scripting
+            .executeScript({
+              target: { tabId },
+              func: () => {
+                const media = (document.querySelector('video') ||
+                  document.querySelector('audio')) as HTMLMediaElement | null;
+                if (media) {
+                  media.play().catch(() => {});
+                }
+              },
+            })
+            .catch(() => {});
+        }
+      };
+      chrome.tabs.onUpdated.addListener(playListener);
+      setTimeout(() => chrome.tabs.onUpdated.removeListener(playListener), 15000);
+
+      await chrome.tabs.update(tabId, { url: targetUrl });
+      this.showToast('Loading and playing media in current tab...');
+    } catch (error) {
+      console.error('Failed to open local media:', error);
+      this.showToast('Failed to load local media');
     }
   }
 
@@ -692,11 +1105,7 @@ class SwiftJotPopup {
 
       const onYouTube = isYouTubeUrl(tab.url);
       const onFacebook = isFacebookUrl(tab.url);
-
-      if (!onYouTube && !onFacebook) {
-        this.showToast('Active tab is not YouTube or Facebook');
-        return;
-      }
+      const onLocalFile = !!tab.url?.startsWith('file://');
 
       let currentTime: number | null = null;
 
@@ -764,10 +1173,45 @@ class SwiftJotPopup {
           },
         });
         currentTime = results?.[0]?.result ?? null;
+      } else {
+        // Local video or audio, or any tab with HTML5 media
+        if (onLocalFile) {
+          const isAllowed = await chrome.extension.isAllowedFileSchemeAccess().catch(() => false);
+          if (!isAllowed) {
+            this.showToast('Please enable "Allow access to file URLs" in chrome://extensions');
+            return;
+          }
+        }
+
+        try {
+          const results = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: () => {
+              const mediaElements = Array.from(
+                document.querySelectorAll('video, audio')
+              ) as (HTMLVideoElement | HTMLAudioElement)[];
+              if (mediaElements.length === 0) return null;
+
+              // 1. Any currently playing media
+              const playing = mediaElements.find((m) => !m.paused && m.currentTime > 0);
+              if (playing) return playing.currentTime;
+
+              // 2. Any media with currentTime > 0
+              const progressing = mediaElements.find((m) => m.currentTime > 0);
+              if (progressing) return progressing.currentTime;
+
+              // 3. First media element
+              return mediaElements[0].currentTime;
+            },
+          });
+          currentTime = results?.[0]?.result ?? null;
+        } catch (scriptErr) {
+          console.error('Failed to query local media currentTime:', scriptErr);
+        }
       }
 
       if (typeof currentTime !== 'number' || isNaN(currentTime)) {
-        this.showToast('No video found on page');
+        this.showToast('No video or audio found on page');
         return;
       }
 
@@ -775,7 +1219,7 @@ class SwiftJotPopup {
       this.insertTextAtCursor(`${formatted} `);
       this.showToast(`Inserted: ${formatted}`);
     } catch (error) {
-      console.error('Failed to fetch video timestamp:', error);
+      console.error('Failed to fetch media timestamp:', error);
       this.showToast('Could not fetch timestamp');
     }
   }
@@ -824,8 +1268,17 @@ class SwiftJotPopup {
   private async handleTextareaClick(e: MouseEvent): Promise<void> {
     const pos = this.textarea.selectionStart;
 
-    // Check if user Ctrl+clicked (or Cmd+clicked) on a YouTube or Facebook URL
+    // Check if user Ctrl+clicked (or Cmd+clicked) on a local media link, YouTube, or Facebook URL
     if (e.ctrlKey || e.metaKey) {
+      let localUrl = getLocalMediaUrlAtPosition(this.textarea.value, pos);
+      if (!localUrl && this.textarea.selectionEnd !== pos) {
+        localUrl = getLocalMediaUrlAtPosition(this.textarea.value, this.textarea.selectionEnd);
+      }
+      if (localUrl) {
+        await this.openLocalMedia(localUrl);
+        return;
+      }
+
       let ytUrl = getYouTubeUrlAtPosition(this.textarea.value, pos);
       if (!ytUrl && this.textarea.selectionEnd !== pos) {
         ytUrl = getYouTubeUrlAtPosition(this.textarea.value, this.textarea.selectionEnd);
@@ -869,7 +1322,8 @@ class SwiftJotPopup {
 
   private showQuickJump(timestamp: string): void {
     this.activeTimestamp = timestamp;
-    this.quickJumpText.textContent = `Jump video to ${timestamp}`;
+    this.quickJumpText.textContent = `Jump media to ${timestamp}`;
+    this.quickJumpBtn.title = `Jump media to ${timestamp}`;
     this.timestampBar.classList.remove('hidden');
   }
 
@@ -889,7 +1343,8 @@ class SwiftJotPopup {
       this.activeTimestamp = timestamps[0];
     }
 
-    this.quickJumpText.textContent = `Jump video to ${this.activeTimestamp}`;
+    this.quickJumpText.textContent = `Jump media to ${this.activeTimestamp}`;
+    this.quickJumpBtn.title = `Jump media to ${this.activeTimestamp}`;
     this.timestampBar.classList.remove('hidden');
   }
 
@@ -903,12 +1358,7 @@ class SwiftJotPopup {
 
       const onYouTube = isYouTubeUrl(tab.url);
       const onFacebook = isFacebookUrl(tab.url);
-
-      if (!onYouTube && !onFacebook) {
-        this.showToast('Active tab is not YouTube or Facebook');
-        return false;
-      }
-
+      const onLocalFile = !!tab.url?.startsWith('file://');
       const targetSeconds = parseTimestampToSeconds(timestamp);
 
       if (onYouTube) {
@@ -946,10 +1396,8 @@ class SwiftJotPopup {
             if (videos.length === 1) {
               target = videos[0];
             } else {
-              // 1. Any currently playing video
               target = videos.find((v) => !v.paused && v.currentTime > 0) || null;
 
-              // 2. Video in dialog/modal if visible
               if (!target) {
                 const dialogVideo = document.querySelector('div[role="dialog"] video') as HTMLVideoElement | null;
                 if (dialogVideo) {
@@ -960,7 +1408,6 @@ class SwiftJotPopup {
                 }
               }
 
-              // 3. Find video closest to viewport center (handles Reels and feed)
               if (!target) {
                 const viewCenterX = window.innerWidth / 2;
                 const viewCenterY = window.innerHeight / 2;
@@ -1011,12 +1458,64 @@ class SwiftJotPopup {
           this.showToast(isReel ? 'No reel video found' : 'No Facebook video found');
           return false;
         }
-      }
+      } else {
+        // Local media or any tab with HTML5 media
+        if (onLocalFile) {
+          const isAllowed = await chrome.extension.isAllowedFileSchemeAccess().catch(() => false);
+          if (!isAllowed) {
+            this.showToast('Please enable "Allow access to file URLs" in chrome://extensions');
+            return false;
+          }
+        }
 
-      return false;
+        try {
+          const results = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            args: [targetSeconds],
+            func: (seconds: number) => {
+              const mediaElements = Array.from(
+                document.querySelectorAll('video, audio')
+              ) as (HTMLVideoElement | HTMLAudioElement)[];
+              if (mediaElements.length === 0) return false;
+
+              let target: HTMLMediaElement | null =
+                mediaElements.find((m) => !m.paused && m.currentTime > 0) || null;
+
+              if (!target) {
+                target = mediaElements.find((m) => m.currentTime > 0) || null;
+              }
+
+              if (!target) {
+                target = mediaElements[0] || null;
+              }
+
+              if (!target) return false;
+
+              target.currentTime = seconds;
+              target.dispatchEvent(new Event('seeking', { bubbles: true }));
+              target.dispatchEvent(new Event('seeked', { bubbles: true }));
+              target.dispatchEvent(new Event('timeupdate', { bubbles: true }));
+              return true;
+            },
+          });
+
+          const success = results?.[0]?.result;
+          if (success) {
+            this.showToast(`Jumped media to ${timestamp}`);
+            return true;
+          } else {
+            this.showToast('No media player found in tab');
+            return false;
+          }
+        } catch (scriptErr) {
+          console.error('Failed to seek media:', scriptErr);
+          this.showToast('Failed to jump media');
+          return false;
+        }
+      }
     } catch (error) {
-      console.error('Failed to seek video:', error);
-      this.showToast('Failed to jump video');
+      console.error('Failed to seek media:', error);
+      this.showToast('Failed to jump media');
       return false;
     }
   }
