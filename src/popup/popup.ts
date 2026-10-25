@@ -801,11 +801,11 @@ class SwiftJotPopup {
               const media = (document.querySelector('video') ||
                 document.querySelector('audio')) as HTMLMediaElement | null;
               if (media) {
-                media.play().catch(() => {});
+                media.play().catch(() => { });
               }
             },
           })
-          .catch(() => {});
+          .catch(() => { });
         this.showToast('Playing media in current tab...');
         return;
       }
@@ -831,11 +831,11 @@ class SwiftJotPopup {
                 const media = (document.querySelector('video') ||
                   document.querySelector('audio')) as HTMLMediaElement | null;
                 if (media) {
-                  media.play().catch(() => {});
+                  media.play().catch(() => { });
                 }
               },
             })
-            .catch(() => {});
+            .catch(() => { });
         }
       };
       chrome.tabs.onUpdated.addListener(playListener);
@@ -880,13 +880,8 @@ class SwiftJotPopup {
             }
 
             if (!title) {
-              title =
-                document.querySelector('h1.ytd-watch-metadata yt-formatted-string')?.textContent?.trim() ||
-                document.querySelector('h1.title yt-formatted-string')?.textContent?.trim() ||
-                document.querySelector('h2.ytd-reel-player-header-renderer')?.textContent?.trim() ||
-                document.querySelector('meta[name="title"]')?.getAttribute('content') ||
-                document.querySelector('meta[property="og:title"]')?.getAttribute('content') ||
-                null;
+              // Title format is like "(1) Title - YouTube" where (1) is the notification count and only exists if the notification count > 0 (when the notification bell exists notification).
+              title = document.title.replace(/^\(\d+\)\s*/, '').replace(/ - YouTube$/, '');
             }
 
             const canonical = document.querySelector('link[rel="canonical"]')?.getAttribute('href');
