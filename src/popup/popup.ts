@@ -422,7 +422,6 @@ class SwiftJotPopup {
   private copyBtn: HTMLButtonElement;
   private clearBtn: HTMLButtonElement;
   private toastEl: HTMLElement;
-  private timestampBar: HTMLElement;
   private quickJumpBtn: HTMLButtonElement;
   private back10sBtn: HTMLButtonElement;
   private playPauseBtn: HTMLButtonElement;
@@ -952,7 +951,7 @@ class SwiftJotPopup {
             if (currB !== null && media.currentTime >= currB) {
               if (currLoop) {
                 media.currentTime = currA;
-                media.play().catch(() => {});
+                media.play().catch(() => { });
               } else {
                 media.currentTime = currB;
                 media.pause();
@@ -963,7 +962,7 @@ class SwiftJotPopup {
               }
             } else if (currLoop && media.ended) {
               media.currentTime = currA;
-              media.play().catch(() => {});
+              media.play().catch(() => { });
             }
           };
 
@@ -978,14 +977,14 @@ class SwiftJotPopup {
           };
           media.addEventListener('pause', onMediaPause);
 
-          media.play().catch(() => {});
+          media.play().catch(() => { });
           return { success: true, isPlaying: true, currentTime: media.currentTime };
         },
       });
 
       const res = results?.[0]?.result;
       if (res && res.success) {
-        this.isPlaying = res.isPlaying;
+        this.isPlaying = !!res.isPlaying;
         this.updatePlayPauseButtonUI(this.isPlaying);
         if (this.isPlaying) {
           const info = this.isLooping ? 'Playing (A-B Loop ON)' : 'Playing';
@@ -1104,7 +1103,7 @@ class SwiftJotPopup {
                 if (currB !== null && media.currentTime >= currB) {
                   if (s.isLooping) {
                     media.currentTime = currA;
-                    media.play().catch(() => {});
+                    media.play().catch(() => { });
                   } else {
                     media.currentTime = currB;
                     media.pause();
@@ -1115,7 +1114,7 @@ class SwiftJotPopup {
                   }
                 } else if (s.isLooping && media.ended) {
                   media.currentTime = currA;
-                  media.play().catch(() => {});
+                  media.play().catch(() => { });
                 }
               }, 35);
             }
