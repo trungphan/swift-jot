@@ -3,13 +3,23 @@ interface PopupSize {
   height: number;
 }
 
+interface LoopState {
+  posA: number | null;
+  posB: number | null;
+  timestampA: string | null;
+  timestampB: string | null;
+  isLooping: boolean;
+}
+
 interface StorageData {
   swiftJotNote?: string;
   swiftJotPopupSize?: PopupSize;
+  swiftJotLoopState?: LoopState;
 }
 
 const STORAGE_KEY = 'swiftJotNote';
 const POPUP_SIZE_KEY = 'swiftJotPopupSize';
+const LOOP_STATE_KEY = 'swiftJotLoopState';
 const DEBOUNCE_DELAY_MS = 300;
 
 const DEFAULT_WIDTH = 380;
@@ -27,6 +37,17 @@ function formatTimestamp(totalSeconds: number): string {
 
   const pad = (n: number, z = 2) => String(n).padStart(z, '0');
   return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}.${pad(milliseconds, 3)}`;
+}
+
+function formatShortDisplay(totalSeconds: number): string {
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = Math.floor(totalSeconds % 60);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  if (hours > 0) {
+    return `${hours}:${pad(minutes)}:${pad(seconds)}`;
+  }
+  return `${pad(minutes)}:${pad(seconds)}`;
 }
 
 function parseTimestampToSeconds(timestamp: string): number {
@@ -403,11 +424,26 @@ class SwiftJotPopup {
   private toastEl: HTMLElement;
   private timestampBar: HTMLElement;
   private quickJumpBtn: HTMLButtonElement;
-  private quickJumpText: HTMLElement;
+  private back10sBtn: HTMLButtonElement;
+  private playPauseBtn: HTMLButtonElement;
+  private playIcon: SVGElement;
+  private pauseIcon: SVGElement;
+  private playPauseText: HTMLElement;
+  private setABtn: HTMLButtonElement;
+  private setBBtn: HTMLButtonElement;
+  private labelPosA: HTMLElement;
+  private labelPosB: HTMLElement;
+  private loopToggleBtn: HTMLButtonElement;
   private resizeHandleLeft: HTMLButtonElement;
   private resizeHandleRight: HTMLButtonElement;
 
   private activeTimestamp: string | null = null;
+  private posA: number | null = null;
+  private posB: number | null = null;
+  private timestampA: string | null = null;
+  private timestampB: string | null = null;
+  private isLooping: boolean = false;
+  private isPlaying: boolean = false;
   private saveTimeout: ReturnType<typeof setTimeout> | null = null;
   private toastTimeout: ReturnType<typeof setTimeout> | null = null;
 
@@ -422,9 +458,17 @@ class SwiftJotPopup {
     this.copyBtn = document.getElementById('copy-btn') as HTMLButtonElement;
     this.clearBtn = document.getElementById('clear-btn') as HTMLButtonElement;
     this.toastEl = document.getElementById('toast') as HTMLElement;
-    this.timestampBar = document.getElementById('timestamp-bar') as HTMLElement;
     this.quickJumpBtn = document.getElementById('quick-jump-btn') as HTMLButtonElement;
-    this.quickJumpText = document.getElementById('quick-jump-text') as HTMLElement;
+    this.back10sBtn = document.getElementById('back-10s-btn') as HTMLButtonElement;
+    this.playPauseBtn = document.getElementById('play-pause-btn') as HTMLButtonElement;
+    this.playIcon = document.getElementById('play-icon') as unknown as SVGElement;
+    this.pauseIcon = document.getElementById('pause-icon') as unknown as SVGElement;
+    this.playPauseText = document.getElementById('play-pause-text') as HTMLElement;
+    this.setABtn = document.getElementById('set-a-btn') as HTMLButtonElement;
+    this.setBBtn = document.getElementById('set-b-btn') as HTMLButtonElement;
+    this.labelPosA = document.getElementById('label-pos-a') as HTMLElement;
+    this.labelPosB = document.getElementById('label-pos-b') as HTMLElement;
+    this.loopToggleBtn = document.getElementById('loop-toggle-btn') as HTMLButtonElement;
     this.resizeHandleLeft = document.getElementById('resize-handle-left') as HTMLButtonElement;
     this.resizeHandleRight = document.getElementById('resize-handle-right') as HTMLButtonElement;
 
@@ -434,6 +478,7 @@ class SwiftJotPopup {
   private async init(): Promise<void> {
     await this.loadPopupSize();
     await this.loadNote();
+    await this.loadLoopState();
     this.bindEvents();
     this.setupResizeHandles();
     this.updateCounters(this.textarea.value);
@@ -462,6 +507,55 @@ class SwiftJotPopup {
       await chrome.storage.local.set({ [POPUP_SIZE_KEY]: { width, height } });
     } catch (err) {
       console.error('Failed to save popup size:', err);
+    }
+  }
+
+  private async loadLoopState(): Promise<void> {
+    try {
+      const data = (await chrome.storage.local.get(LOOP_STATE_KEY)) as StorageData;
+      const state = data?.[LOOP_STATE_KEY];
+      if (state) {
+        this.posA = typeof state.posA === 'number' ? state.posA : null;
+        this.posB = typeof state.posB === 'number' ? state.posB : null;
+        this.timestampA = typeof state.timestampA === 'string' ? state.timestampA : null;
+        this.timestampB = typeof state.timestampB === 'string' ? state.timestampB : null;
+        this.isLooping = Boolean(state.isLooping);
+
+        if (this.posA !== null && this.timestampA) {
+          this.labelPosA.textContent = formatShortDisplay(this.posA);
+          this.setABtn.classList.add('has-value');
+          this.setABtn.title = `A set to ${this.timestampA} (Alt+Click to clear)`;
+        }
+
+        if (this.posB !== null && this.timestampB) {
+          this.labelPosB.textContent = formatShortDisplay(this.posB);
+          this.setBBtn.classList.add('has-value');
+          this.setBBtn.title = `B set to ${this.timestampB} (Alt+Click to clear)`;
+        }
+
+        if (this.isLooping) {
+          this.loopToggleBtn.classList.add('active');
+          this.loopToggleBtn.setAttribute('aria-pressed', 'true');
+          this.loopToggleBtn.title = 'A-B Loop ON (Click to turn OFF)';
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load loop state:', err);
+    }
+  }
+
+  private async saveLoopState(): Promise<void> {
+    try {
+      const state: LoopState = {
+        posA: this.posA,
+        posB: this.posB,
+        timestampA: this.timestampA,
+        timestampB: this.timestampB,
+        isLooping: this.isLooping,
+      };
+      await chrome.storage.local.set({ [LOOP_STATE_KEY]: state });
+    } catch (err) {
+      console.error('Failed to save loop state:', err);
     }
   }
 
@@ -578,7 +672,39 @@ class SwiftJotPopup {
     this.quickJumpBtn.addEventListener('click', async () => {
       if (this.activeTimestamp) {
         await this.seekVideo(this.activeTimestamp);
+      } else {
+        this.showToast('Select or place cursor on a timestamp first');
       }
+    });
+
+    this.back10sBtn.addEventListener('click', async () => {
+      await this.handleBack10s();
+    });
+
+    this.playPauseBtn.addEventListener('click', async () => {
+      await this.handlePlayPause();
+    });
+
+    this.setABtn.addEventListener('click', async (e: MouseEvent) => {
+      await this.handleSetA(e);
+    });
+
+    this.setBBtn.addEventListener('click', async (e: MouseEvent) => {
+      await this.handleSetB(e);
+    });
+
+    this.setABtn.addEventListener('contextmenu', async (e: MouseEvent) => {
+      e.preventDefault();
+      await this.handleSetA(new MouseEvent('click', { altKey: true }));
+    });
+
+    this.setBBtn.addEventListener('contextmenu', async (e: MouseEvent) => {
+      e.preventDefault();
+      await this.handleSetB(new MouseEvent('click', { altKey: true }));
+    });
+
+    this.loopToggleBtn.addEventListener('click', async () => {
+      await this.handleToggleLoop();
     });
 
     this.mediaLinkBtn.addEventListener('click', async () => {
@@ -601,6 +727,14 @@ class SwiftJotPopup {
       if (e.altKey && (e.key === 't' || e.key === 'T')) {
         e.preventDefault();
         this.insertTimestamp();
+      } else if (e.altKey && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault();
+        this.handlePlayPause();
+      } else if (e.altKey && (e.key === 'j' || e.key === 'J')) {
+        e.preventDefault();
+        if (this.activeTimestamp) {
+          this.seekVideo(this.activeTimestamp);
+        }
       } else if (
         e.altKey &&
         (e.key === 'm' ||
@@ -616,6 +750,381 @@ class SwiftJotPopup {
         this.insertMediaLink();
       }
     });
+  }
+
+  private getSelectedOrCursorTimestamp(): string | null {
+    const start = this.textarea.selectionStart;
+    const end = this.textarea.selectionEnd;
+    const text = this.textarea.value;
+
+    if (start !== end) {
+      const sel = text.substring(Math.min(start, end), Math.max(start, end)).trim();
+      const match = sel.match(/\b\d{2}:\d{2}:\d{2}\.\d{3}\b/);
+      if (match) return match[0];
+
+      const matchFlex = sel.match(/\b(?:(\d{1,2}):)?([0-5]?\d):([0-5]\d)(?:\.(\d{1,3}))?\b/);
+      if (matchFlex) {
+        const h = parseInt(matchFlex[1] || '0', 10);
+        const m = parseInt(matchFlex[2], 10);
+        const s = parseInt(matchFlex[3], 10);
+        const ms = parseInt((matchFlex[4] || '0').padEnd(3, '0').slice(0, 3), 10);
+        const pad = (n: number, z = 2) => String(n).padStart(z, '0');
+        return `${pad(h)}:${pad(m)}:${pad(s)}.${pad(ms, 3)}`;
+      }
+    }
+
+    const atCursor = getTimestampAtPosition(text, start);
+    if (atCursor) return atCursor;
+
+    if (this.activeTimestamp) return this.activeTimestamp;
+
+    return null;
+  }
+
+  private async handleSetA(e?: MouseEvent): Promise<void> {
+    if (e && (e.altKey || e.ctrlKey || e.metaKey)) {
+      this.posA = null;
+      this.timestampA = null;
+      this.labelPosA.textContent = '--:--';
+      this.setABtn.classList.remove('has-value');
+      this.setABtn.title = 'Set A position (select timestamp in text first)';
+      await this.saveLoopState();
+      await this.syncLoopSettingsToTab();
+      this.showToast('Cleared position A');
+      return;
+    }
+
+    const ts = this.getSelectedOrCursorTimestamp();
+    if (!ts) {
+      if (this.posA !== null && this.timestampA) {
+        this.showToast(`A is at ${this.timestampA}. Select a timestamp to change.`);
+      } else {
+        this.showToast('Select a timestamp in the note to set A');
+      }
+      return;
+    }
+
+    this.timestampA = ts;
+    this.posA = parseTimestampToSeconds(ts);
+    this.labelPosA.textContent = formatShortDisplay(this.posA);
+    this.setABtn.classList.add('has-value');
+    this.setABtn.title = `A set to ${ts} (Alt+Click to clear)`;
+
+    await this.saveLoopState();
+    await this.syncLoopSettingsToTab();
+    this.showToast(`Set A: ${ts}`);
+  }
+
+  private async handleSetB(e?: MouseEvent): Promise<void> {
+    if (e && (e.altKey || e.ctrlKey || e.metaKey)) {
+      this.posB = null;
+      this.timestampB = null;
+      this.labelPosB.textContent = '--:--';
+      this.setBBtn.classList.remove('has-value');
+      this.setBBtn.title = 'Set B position (select timestamp in text first)';
+      await this.saveLoopState();
+      await this.syncLoopSettingsToTab();
+      this.showToast('Cleared position B');
+      return;
+    }
+
+    const ts = this.getSelectedOrCursorTimestamp();
+    if (!ts) {
+      if (this.posB !== null && this.timestampB) {
+        this.showToast(`B is at ${this.timestampB}. Select a timestamp to change.`);
+      } else {
+        this.showToast('Select a timestamp in the note to set B');
+      }
+      return;
+    }
+
+    this.timestampB = ts;
+    this.posB = parseTimestampToSeconds(ts);
+    this.labelPosB.textContent = formatShortDisplay(this.posB);
+    this.setBBtn.classList.add('has-value');
+    this.setBBtn.title = `B set to ${ts} (Alt+Click to clear)`;
+
+    await this.saveLoopState();
+    await this.syncLoopSettingsToTab();
+    this.showToast(`Set B: ${ts}`);
+  }
+
+  private async handleToggleLoop(): Promise<void> {
+    this.isLooping = !this.isLooping;
+    this.loopToggleBtn.classList.toggle('active', this.isLooping);
+    this.loopToggleBtn.setAttribute('aria-pressed', String(this.isLooping));
+    this.loopToggleBtn.title = this.isLooping
+      ? 'A-B Loop ON (Click to turn OFF)'
+      : 'A-B Loop OFF (Click to turn ON)';
+
+    await this.saveLoopState();
+    await this.syncLoopSettingsToTab();
+    this.showToast(this.isLooping ? 'A-B Loop: ON' : 'A-B Loop: OFF');
+  }
+
+  private updatePlayPauseButtonUI(isPlaying: boolean): void {
+    if (isPlaying) {
+      this.playIcon.classList.add('hidden');
+      this.pauseIcon.classList.remove('hidden');
+      this.playPauseText.textContent = 'Pause';
+      this.playPauseBtn.classList.add('is-playing');
+      this.playPauseBtn.title = 'Pause media (Alt+P)';
+    } else {
+      this.playIcon.classList.remove('hidden');
+      this.pauseIcon.classList.add('hidden');
+      this.playPauseText.textContent = 'Play';
+      this.playPauseBtn.classList.remove('is-playing');
+      this.playPauseBtn.title = 'Play media (Alt+P)';
+    }
+  }
+
+  private async handlePlayPause(): Promise<void> {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab || !tab.id) {
+        this.showToast('No active tab found');
+        return;
+      }
+
+      if (tab.url?.startsWith('file://')) {
+        const isAllowed = await chrome.extension.isAllowedFileSchemeAccess().catch(() => false);
+        if (!isAllowed) {
+          this.showToast('Enable "Allow access to file URLs" in chrome://extensions');
+          return;
+        }
+      }
+
+      const posA = this.posA;
+      const posB = this.posB;
+      const isLooping = this.isLooping;
+
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        args: [posA, posB, isLooping],
+        func: (a: number | null, b: number | null, loop: boolean) => {
+          function findMedia(): HTMLMediaElement | null {
+            const yt = document.querySelector('video.html5-main-video') as HTMLVideoElement | null;
+            if (yt) return yt;
+            const all = Array.from(document.querySelectorAll('video, audio')) as HTMLMediaElement[];
+            if (all.length === 0) return null;
+            const playing = all.find((m) => !m.paused && m.currentTime > 0);
+            if (playing) return playing;
+            const progress = all.find((m) => m.currentTime > 0);
+            if (progress) return progress;
+            return all[0];
+          }
+
+          const media = findMedia();
+          if (!media) return { success: false, reason: 'No media player found in tab' };
+
+          const win = window as any;
+          win.__swiftJotLoopSettings = { posA: a, posB: b, isLooping: loop };
+
+          if (!media.paused) {
+            media.pause();
+            if (win.__swiftJotLoopInterval) {
+              clearInterval(win.__swiftJotLoopInterval);
+              win.__swiftJotLoopInterval = null;
+            }
+            return { success: true, isPlaying: false, currentTime: media.currentTime };
+          }
+
+          const startA = a !== null ? Math.max(a, 0) : null;
+          const endB = b !== null ? Math.min(b, media.duration || Infinity) : null;
+
+          if (startA !== null) {
+            if (media.currentTime < startA || (endB !== null && media.currentTime >= endB)) {
+              media.currentTime = startA;
+            }
+          }
+
+          if (win.__swiftJotLoopInterval) {
+            clearInterval(win.__swiftJotLoopInterval);
+            win.__swiftJotLoopInterval = null;
+          }
+
+          const checkBoundary = () => {
+            const s = win.__swiftJotLoopSettings || { posA: a, posB: b, isLooping: loop };
+            const currA = s.posA !== null ? Math.max(s.posA, 0) : 0;
+            const currB = s.posB !== null ? Math.min(s.posB, media.duration || Infinity) : null;
+            const currLoop = s.isLooping;
+
+            if (currB !== null && media.currentTime >= currB) {
+              if (currLoop) {
+                media.currentTime = currA;
+                media.play().catch(() => {});
+              } else {
+                media.currentTime = currB;
+                media.pause();
+                if (win.__swiftJotLoopInterval) {
+                  clearInterval(win.__swiftJotLoopInterval);
+                  win.__swiftJotLoopInterval = null;
+                }
+              }
+            } else if (currLoop && media.ended) {
+              media.currentTime = currA;
+              media.play().catch(() => {});
+            }
+          };
+
+          win.__swiftJotLoopInterval = setInterval(checkBoundary, 35);
+
+          const onMediaPause = () => {
+            if (win.__swiftJotLoopInterval) {
+              clearInterval(win.__swiftJotLoopInterval);
+              win.__swiftJotLoopInterval = null;
+            }
+            media.removeEventListener('pause', onMediaPause);
+          };
+          media.addEventListener('pause', onMediaPause);
+
+          media.play().catch(() => {});
+          return { success: true, isPlaying: true, currentTime: media.currentTime };
+        },
+      });
+
+      const res = results?.[0]?.result;
+      if (res && res.success) {
+        this.isPlaying = res.isPlaying;
+        this.updatePlayPauseButtonUI(this.isPlaying);
+        if (this.isPlaying) {
+          const info = this.isLooping ? 'Playing (A-B Loop ON)' : 'Playing';
+          this.showToast(info);
+        } else {
+          this.showToast('Paused');
+        }
+      } else {
+        this.showToast(res?.reason || 'No media player found');
+      }
+    } catch (err) {
+      console.error('Failed to toggle play/pause:', err);
+      this.showToast('Failed to control playback');
+    }
+  }
+
+  private async handleBack10s(): Promise<void> {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab || !tab.id) {
+        this.showToast('No active tab found');
+        return;
+      }
+
+      if (tab.url?.startsWith('file://')) {
+        const isAllowed = await chrome.extension.isAllowedFileSchemeAccess().catch(() => false);
+        if (!isAllowed) {
+          this.showToast('Enable "Allow access to file URLs" in chrome://extensions');
+          return;
+        }
+      }
+
+      const boundA = this.posA;
+
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        args: [boundA],
+        func: (boundAVal: number | null) => {
+          function findMedia(): HTMLMediaElement | null {
+            const yt = document.querySelector('video.html5-main-video') as HTMLVideoElement | null;
+            if (yt) return yt;
+            const all = Array.from(document.querySelectorAll('video, audio')) as HTMLMediaElement[];
+            if (all.length === 0) return null;
+            const playing = all.find((m) => !m.paused && m.currentTime > 0);
+            if (playing) return playing;
+            const progress = all.find((m) => m.currentTime > 0);
+            if (progress) return progress;
+            return all[0];
+          }
+
+          const media = findMedia();
+          if (!media) return { success: false, reason: 'No media player found in tab' };
+
+          const minA = boundAVal !== null ? Math.max(boundAVal, 0) : 0;
+          const targetTime = Math.max(media.currentTime - 10, minA);
+          media.currentTime = targetTime;
+          media.dispatchEvent(new Event('seeking', { bubbles: true }));
+          media.dispatchEvent(new Event('seeked', { bubbles: true }));
+          media.dispatchEvent(new Event('timeupdate', { bubbles: true }));
+
+          return { success: true, newTime: media.currentTime };
+        },
+      });
+
+      const res = results?.[0]?.result;
+      if (res && res.success && typeof res.newTime === 'number') {
+        const formatted = formatShortDisplay(res.newTime);
+        this.showToast(`Rewound -10s (${formatted})`);
+      } else {
+        this.showToast(res?.reason || 'No media player found in tab');
+      }
+    } catch (err) {
+      console.error('Failed to rewind 10s:', err);
+      this.showToast('Failed to rewind');
+    }
+  }
+
+  private async syncLoopSettingsToTab(): Promise<void> {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab || !tab.id) return;
+
+      if (tab.url?.startsWith('file://')) {
+        const isAllowed = await chrome.extension.isAllowedFileSchemeAccess().catch(() => false);
+        if (!isAllowed) return;
+      }
+
+      const posA = this.posA;
+      const posB = this.posB;
+      const isLooping = this.isLooping;
+
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        args: [posA, posB, isLooping],
+        func: (a: number | null, b: number | null, loop: boolean) => {
+          const win = window as any;
+          win.__swiftJotLoopSettings = { posA: a, posB: b, isLooping: loop };
+
+          if ((loop || b !== null) && !win.__swiftJotLoopInterval) {
+            function findMedia(): HTMLMediaElement | null {
+              const yt = document.querySelector('video.html5-main-video') as HTMLVideoElement | null;
+              if (yt) return yt;
+              const all = Array.from(document.querySelectorAll('video, audio')) as HTMLMediaElement[];
+              if (all.length === 0) return null;
+              const playing = all.find((m) => !m.paused && m.currentTime > 0);
+              if (playing) return playing;
+              return all[0];
+            }
+            const media = findMedia();
+            if (media && !media.paused) {
+              win.__swiftJotLoopInterval = setInterval(() => {
+                const s = win.__swiftJotLoopSettings;
+                if (!s) return;
+                const currA = s.posA !== null ? Math.max(s.posA, 0) : 0;
+                const currB = s.posB !== null ? Math.min(s.posB, media.duration || Infinity) : null;
+                if (currB !== null && media.currentTime >= currB) {
+                  if (s.isLooping) {
+                    media.currentTime = currA;
+                    media.play().catch(() => {});
+                  } else {
+                    media.currentTime = currB;
+                    media.pause();
+                    if (win.__swiftJotLoopInterval) {
+                      clearInterval(win.__swiftJotLoopInterval);
+                      win.__swiftJotLoopInterval = null;
+                    }
+                  }
+                } else if (s.isLooping && media.ended) {
+                  media.currentTime = currA;
+                  media.play().catch(() => {});
+                }
+              }, 35);
+            }
+          }
+        },
+      });
+    } catch {
+      // Ignore
+    }
   }
 
   private async checkActiveMediaStatus(): Promise<void> {
@@ -648,30 +1157,53 @@ class SwiftJotPopup {
         this.mediaLinkBtn.title = 'Insert media link (Alt+M) • Local media detected';
         this.timestampBtn.classList.add('has-media');
         this.timestampBtn.title = 'Insert media timestamp (Alt+T) • Local media detected';
-      } else if (tab.id) {
+      }
+
+      if (tab.id) {
+        if (tab.url?.startsWith('file://')) {
+          const isAllowed = await chrome.extension.isAllowedFileSchemeAccess().catch(() => false);
+          if (!isAllowed) return;
+        }
+
         try {
           const results = await chrome.scripting.executeScript({
             target: { tabId: tab.id },
             func: () => {
-              return !!document.querySelector('video, audio');
+              const yt = document.querySelector('video.html5-main-video') as HTMLVideoElement | null;
+              if (yt) {
+                return { hasMedia: true, paused: yt.paused };
+              }
+              const media = (document.querySelector('video') ||
+                document.querySelector('audio')) as HTMLMediaElement | null;
+              if (media) {
+                return { hasMedia: true, paused: media.paused };
+              }
+              return { hasMedia: false, paused: true };
             },
           });
-          if (results?.[0]?.result) {
-            this.mediaLinkBtn.classList.add('has-local-media');
-            this.mediaLinkBtn.title = 'Insert media link (Alt+M) • Media player detected';
-            this.timestampBtn.classList.add('has-media');
-            this.timestampBtn.title = 'Insert media timestamp (Alt+T) • Media player detected';
+
+          const state = results?.[0]?.result;
+          if (state && state.hasMedia) {
+            this.isPlaying = !state.paused;
+            this.updatePlayPauseButtonUI(this.isPlaying);
+            if (!isYouTubeUrl(tab.url) && !isFacebookUrl(tab.url) && !tab.url?.startsWith('file://')) {
+              this.mediaLinkBtn.classList.add('has-local-media');
+              this.mediaLinkBtn.title = 'Insert media link (Alt+M) • Media player detected';
+              this.timestampBtn.classList.add('has-media');
+              this.timestampBtn.title = 'Insert media timestamp (Alt+T) • Media player detected';
+            }
           } else {
-            this.mediaLinkBtn.title = 'Insert media link (Alt+M)';
-            this.timestampBtn.title = 'Insert media timestamp (Alt+T)';
+            this.isPlaying = false;
+            this.updatePlayPauseButtonUI(false);
+            if (!isYouTubeUrl(tab.url) && !isFacebookUrl(tab.url) && !tab.url?.startsWith('file://')) {
+              this.mediaLinkBtn.title = 'Insert media link (Alt+M)';
+              this.timestampBtn.title = 'Insert media timestamp (Alt+T)';
+            }
           }
         } catch {
-          this.mediaLinkBtn.title = 'Insert media link (Alt+M)';
-          this.timestampBtn.title = 'Insert media timestamp (Alt+T)';
+          this.isPlaying = false;
+          this.updatePlayPauseButtonUI(false);
         }
-      } else {
-        this.mediaLinkBtn.title = 'Insert media link (Alt+M)';
-        this.timestampBtn.title = 'Insert media timestamp (Alt+T)';
       }
     } catch (err) {
       console.error('Failed to check media status:', err);
@@ -1317,9 +1849,9 @@ class SwiftJotPopup {
 
   private showQuickJump(timestamp: string): void {
     this.activeTimestamp = timestamp;
-    this.quickJumpText.textContent = `Jump media to ${timestamp}`;
+    this.quickJumpBtn.disabled = false;
+    this.quickJumpBtn.classList.remove('disabled');
     this.quickJumpBtn.title = `Jump media to ${timestamp}`;
-    this.timestampBar.classList.remove('hidden');
   }
 
   private hideQuickJump(): void {
@@ -1330,7 +1862,9 @@ class SwiftJotPopup {
     const timestamps = extractTimestamps(text);
     if (timestamps.length === 0) {
       this.activeTimestamp = null;
-      this.timestampBar.classList.add('hidden');
+      this.quickJumpBtn.disabled = true;
+      this.quickJumpBtn.classList.add('disabled');
+      this.quickJumpBtn.title = 'Select or place cursor on a timestamp to jump';
       return;
     }
 
@@ -1338,9 +1872,9 @@ class SwiftJotPopup {
       this.activeTimestamp = timestamps[0];
     }
 
-    this.quickJumpText.textContent = `Jump media to ${this.activeTimestamp}`;
+    this.quickJumpBtn.disabled = false;
+    this.quickJumpBtn.classList.remove('disabled');
     this.quickJumpBtn.title = `Jump media to ${this.activeTimestamp}`;
-    this.timestampBar.classList.remove('hidden');
   }
 
   private async seekVideo(timestamp: string): Promise<boolean> {

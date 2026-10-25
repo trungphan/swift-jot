@@ -216,41 +216,149 @@ body {
 .timestamp-bar {
   display: flex;
   align-items: center;
-  padding: 5px 14px;
+  justify-content: space-between;
+  padding: 4px 10px;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border-color);
   animation: fadeIn 0.15s ease;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.timestamp-bar::-webkit-scrollbar {
+  display: none;
 }
 
 .timestamp-bar.hidden {
   display: none;
 }
 
-.quick-jump-btn {
+.hidden {
+  display: none !important;
+}
+
+.playback-controls-group,
+.loop-controls-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.playback-divider {
+  width: 1px;
+  height: 16px;
+  background-color: var(--border-color);
+  flex-shrink: 0;
+}
+
+.ctrl-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
+  gap: 4px;
+  padding: 3px 7px;
   border-radius: var(--radius-sm);
-  border: 1px solid rgba(245, 158, 11, 0.35);
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-family: var(--font-family);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  user-select: none;
+  line-height: 1.2;
+}
+
+.ctrl-btn:hover {
+  background: var(--border-color);
+  color: var(--text-primary);
+  transform: translateY(-0.5px);
+}
+
+.ctrl-btn:active {
+  transform: scale(0.96);
+}
+
+.ctrl-btn.disabled,
+.ctrl-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* Jump Button - Amber */
+.jump-btn {
+  border-color: rgba(245, 158, 11, 0.35);
   background: rgba(245, 158, 11, 0.08);
   color: #b45309;
   font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.15s ease;
+  font-size: 10.5px;
 }
 
-.quick-jump-btn:hover {
-  background: rgba(245, 158, 11, 0.16);
+.jump-btn:hover {
+  background: rgba(245, 158, 11, 0.18);
   border-color: #d97706;
   color: #92400e;
-  transform: translateY(-1px);
 }
 
-.quick-jump-btn:active {
-  transform: scale(0.96);
+/* Play/Pause Button */
+.play-pause-btn {
+  font-size: 11px;
+}
+
+.play-pause-btn.is-playing {
+  border-color: rgba(16, 185, 129, 0.4);
+  background: rgba(16, 185, 129, 0.1);
+  color: #059669;
+}
+
+.play-pause-btn.is-playing:hover {
+  background: rgba(16, 185, 129, 0.18);
+  color: #047857;
+}
+
+/* Set A and Set B buttons */
+.loop-btn {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2.5px 6px;
+}
+
+.loop-btn .badge-letter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: rgba(99, 102, 241, 0.12);
+  color: var(--accent-color);
+  font-weight: 700;
+  font-size: 9.5px;
+}
+
+.loop-btn.has-value {
+  border-color: rgba(99, 102, 241, 0.4);
+  color: var(--text-primary);
+}
+
+.loop-btn.has-value .badge-letter {
+  background: var(--accent-color);
+  color: #ffffff;
+}
+
+.loop-btn .loop-time-label {
+  font-size: 10px;
+}
+
+/* Loop Toggle Button */
+.loop-toggle-btn.active {
+  border-color: var(--accent-color);
+  background: var(--accent-light);
+  color: var(--accent-color);
+  font-weight: 600;
 }
 
 @keyframes fadeIn {
@@ -452,16 +560,39 @@ body {
     box-shadow: 0 0 4px rgba(251, 191, 36, 0.8);
   }
 
-  .quick-jump-btn {
+  .ctrl-btn {
+    background: var(--bg-primary);
+    border-color: var(--border-color);
+    color: var(--text-secondary);
+  }
+
+  .ctrl-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-primary);
+  }
+
+  .jump-btn {
     border-color: rgba(245, 158, 11, 0.45);
     background: rgba(245, 158, 11, 0.16);
     color: #fbbf24;
   }
 
-  .quick-jump-btn:hover {
+  .jump-btn:hover {
     background: rgba(245, 158, 11, 0.26);
     border-color: #fbbf24;
     color: #fef08a;
+  }
+
+  .play-pause-btn.is-playing {
+    border-color: rgba(52, 211, 153, 0.45);
+    background: rgba(16, 185, 129, 0.2);
+    color: #34d399;
+  }
+
+  .loop-toggle-btn.active {
+    border-color: var(--accent-color);
+    background: rgba(99, 102, 241, 0.25);
+    color: #a5b4fc;
   }
 
   .hl-timestamp {

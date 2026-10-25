@@ -47,13 +47,58 @@
         </div>
       </header>
 
-      <div id="timestamp-bar" class="timestamp-bar hidden" aria-label="Jump media to timestamp">
-        <button id="quick-jump-btn" class="quick-jump-btn" type="button" title="Jump media to this timestamp">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
-            <polygon points="5 3 19 12 5 21 5 3" />
-          </svg>
-          <span id="quick-jump-text">Jump media to 00:00:00.000</span>
-        </button>
+      <div id="timestamp-bar" class="timestamp-bar" aria-label="Advanced playback control">
+        <div class="playback-controls-group">
+          <button id="quick-jump-btn" class="ctrl-btn jump-btn" type="button" title="Jump media to timestamp">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="5 3 19 12 5 21 5 3" />
+            </svg>
+            <span>Jump</span>
+          </button>
+
+          <button id="back-10s-btn" class="ctrl-btn" type="button" title="Rewind 10 seconds (-10s)" aria-label="Rewind 10 seconds">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="11 17 6 12 11 7" />
+              <polyline points="18 17 13 12 18 7" />
+            </svg>
+            <span>-10s</span>
+          </button>
+
+          <button id="play-pause-btn" class="ctrl-btn play-pause-btn" type="button" title="Play media" aria-label="Play or pause media">
+            <svg id="play-icon" width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="5 3 19 12 5 21 5 3" />
+            </svg>
+            <svg id="pause-icon" class="hidden" width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+              <rect x="6" y="4" width="4" height="16" rx="1" />
+              <rect x="14" y="4" width="4" height="16" rx="1" />
+            </svg>
+            <span id="play-pause-text">Play</span>
+          </button>
+        </div>
+
+        <div class="playback-divider"></div>
+
+        <div class="loop-controls-group">
+          <button id="set-a-btn" class="ctrl-btn loop-btn" type="button" title="Set A position (select timestamp in text first)" aria-label="Set A position">
+            <span class="badge-letter">A</span>
+            <span id="label-pos-a" class="loop-time-label">--:--</span>
+          </button>
+
+          <button id="set-b-btn" class="ctrl-btn loop-btn" type="button" title="Set B position (select timestamp in text first)" aria-label="Set B position">
+            <span class="badge-letter">B</span>
+            <span id="label-pos-b" class="loop-time-label">--:--</span>
+          </button>
+
+          <button id="loop-toggle-btn" class="ctrl-btn loop-toggle-btn" type="button" title="Toggle A-B loop (OFF)" aria-label="Toggle A-B loop" aria-pressed="false">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="17 1 21 5 17 9" />
+              <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+              <polyline points="7 23 3 19 7 15" />
+              <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+            </svg>
+            <span>Loop</span>
+          </button>
+        </div>
       </div>
 
       <main class="editor-section">
