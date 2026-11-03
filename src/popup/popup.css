@@ -310,19 +310,63 @@ body.freely-positioned #window-state-btn:hover {
   pointer-events: none;
 }
 
-/* Jump Button - Amber */
+/* Jump Button - Base */
 .jump-btn {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+/* Jump Button - Amber (timestamp, default) */
+.jump-btn.jump-timestamp {
   border-color: rgba(245, 158, 11, 0.35);
   background: rgba(245, 158, 11, 0.08);
   color: #b45309;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
 }
 
-.jump-btn:hover {
+.jump-btn.jump-timestamp:hover {
   background: rgba(245, 158, 11, 0.18);
   border-color: #d97706;
   color: #92400e;
+}
+
+/* Jump Button - Red (YouTube) */
+.jump-btn.jump-youtube {
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.08);
+  color: #dc2626;
+}
+
+.jump-btn.jump-youtube:hover {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: #ef4444;
+  color: #b91c1c;
+}
+
+/* Jump Button - Blue (Facebook) */
+.jump-btn.jump-facebook {
+  border-color: rgba(24, 119, 242, 0.35);
+  background: rgba(24, 119, 242, 0.08);
+  color: #1877f2;
+}
+
+.jump-btn.jump-facebook:hover {
+  background: rgba(24, 119, 242, 0.18);
+  border-color: #1877f2;
+  color: #1565c0;
+}
+
+/* Jump Button - Purple (Local Media) */
+.jump-btn.jump-local-media {
+  border-color: rgba(124, 58, 237, 0.35);
+  background: rgba(124, 58, 237, 0.08);
+  color: #7c3aed;
+}
+
+.jump-btn.jump-local-media:hover {
+  background: rgba(124, 58, 237, 0.18);
+  border-color: #8b5cf6;
+  color: #6d28d9;
 }
 
 /* Rewind Split Button & Dropdown */
@@ -685,16 +729,52 @@ body.freely-positioned #window-state-btn:hover {
     color: var(--text-primary);
   }
 
-  .jump-btn {
+  .jump-btn.jump-timestamp {
     border-color: rgba(245, 158, 11, 0.45);
     background: rgba(245, 158, 11, 0.16);
     color: #fbbf24;
   }
 
-  .jump-btn:hover {
+  .jump-btn.jump-timestamp:hover {
     background: rgba(245, 158, 11, 0.26);
     border-color: #fbbf24;
     color: #fef08a;
+  }
+
+  .jump-btn.jump-youtube {
+    border-color: rgba(239, 68, 68, 0.45);
+    background: rgba(239, 68, 68, 0.16);
+    color: #f87171;
+  }
+
+  .jump-btn.jump-youtube:hover {
+    background: rgba(239, 68, 68, 0.26);
+    border-color: #f87171;
+    color: #fca5a5;
+  }
+
+  .jump-btn.jump-facebook {
+    border-color: rgba(24, 119, 242, 0.45);
+    background: rgba(24, 119, 242, 0.16);
+    color: #60a5fa;
+  }
+
+  .jump-btn.jump-facebook:hover {
+    background: rgba(24, 119, 242, 0.26);
+    border-color: #60a5fa;
+    color: #93c5fd;
+  }
+
+  .jump-btn.jump-local-media {
+    border-color: rgba(139, 92, 246, 0.45);
+    background: rgba(139, 92, 246, 0.16);
+    color: #a78bfa;
+  }
+
+  .jump-btn.jump-local-media:hover {
+    background: rgba(139, 92, 246, 0.26);
+    border-color: #a78bfa;
+    color: #c4b5fd;
   }
 
   .play-pause-btn.is-playing {

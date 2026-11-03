@@ -460,7 +460,7 @@ class SwiftJotPopup {
   private resizeHandleLeft: HTMLButtonElement;
   private resizeHandleRight: HTMLButtonElement;
 
-  private activeTimestamp: string | null = null;
+  private jumpTarget: { type: 'timestamp' | 'youtube' | 'facebook' | 'local-media'; value: string } | null = null;
   private posA: number | null = null;
   private posB: number | null = null;
   private timestampA: string | null = null;
@@ -516,7 +516,6 @@ class SwiftJotPopup {
     this.setupTitleBarDrag();
     this.setupStorageSync();
     this.updateCounters(this.textarea.value);
-    this.updateJumpBar(this.textarea.value);
     this.syncHighlights();
     await this.checkActiveMediaStatus();
 
@@ -815,7 +814,7 @@ class SwiftJotPopup {
         e.preventDefault();
         try {
           header.setPointerCapture(e.pointerId);
-        } catch {}
+        } catch { }
         isDragging = true;
         header.classList.add('dragging');
 
@@ -830,7 +829,7 @@ class SwiftJotPopup {
         isDragging = true;
         try {
           header.setPointerCapture(e.pointerId);
-        } catch {}
+        } catch { }
         startOuterX = window.screenX;
         startOuterY = window.screenY;
       }
@@ -845,7 +844,7 @@ class SwiftJotPopup {
           isDragging = false;
           try {
             header.releasePointerCapture(e.pointerId);
-          } catch {}
+          } catch { }
 
           const deltaX = e.screenX - startScreenMouseX;
           const deltaY = e.screenY - startScreenMouseY;
@@ -877,7 +876,7 @@ class SwiftJotPopup {
               await chrome.windows.update(currentWin.id, {
                 left: pendingLeft,
                 top: pendingTop,
-              }).catch(() => {});
+              }).catch(() => { });
             }
           }
         });
@@ -889,7 +888,7 @@ class SwiftJotPopup {
       isDragging = false;
       try {
         header.releasePointerCapture(e.pointerId);
-      } catch {}
+      } catch { }
       header.classList.remove('dragging');
 
       if (this.isDetachedMode && pendingLeft !== null && pendingTop !== null) {
@@ -913,7 +912,6 @@ class SwiftJotPopup {
           this.textarea.value = newVal;
           this.textarea.setSelectionRange(start, end);
           this.updateCounters(newVal);
-          this.updateJumpBar(newVal);
           this.syncHighlights();
         }
       }
@@ -980,7 +978,7 @@ class SwiftJotPopup {
           await chrome.windows.update(currentWin.id, {
             width: DEFAULT_WIDTH,
             height: DEFAULT_HEIGHT,
-          }).catch(() => {});
+          }).catch(() => { });
         }
         await chrome.storage.local.set({
           [DETACHED_SIZE_KEY]: { width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT },
@@ -1053,7 +1051,7 @@ class SwiftJotPopup {
                 await chrome.windows.update(currentWin.id, {
                   width: pendingResizeWidth,
                   height: pendingResizeHeight,
-                }).catch(() => {});
+                }).catch(() => { });
               }
             }
           });
@@ -1128,10 +1126,22 @@ class SwiftJotPopup {
     });
 
     this.quickJumpBtn.addEventListener('click', async () => {
-      if (this.activeTimestamp) {
-        await this.seekVideo(this.activeTimestamp);
-      } else {
-        this.showToast('Select or place cursor on a timestamp first');
+      if (this.jumpTarget == undefined) {
+        return;
+      }
+      switch (this.jumpTarget.type) {
+        case 'timestamp':
+          await this.seekVideo(this.jumpTarget.value);
+          break;
+        case 'youtube':
+          await this.openYouTubeVideo(this.jumpTarget.value);
+          break;
+        case 'facebook':
+          await this.openFacebookUrl(this.jumpTarget.value);
+          break;
+        case 'local-media':
+          await this.openLocalMedia(this.jumpTarget.value);
+          break;
       }
     });
 
@@ -1234,9 +1244,7 @@ class SwiftJotPopup {
         this.handlePlayPause();
       } else if (e.altKey && (e.key === 'j' || e.key === 'J')) {
         e.preventDefault();
-        if (this.activeTimestamp) {
-          this.seekVideo(this.activeTimestamp);
-        }
+        this.quickJumpBtn.click();
       } else if (
         e.altKey &&
         (e.key === 'm' ||
@@ -2298,7 +2306,6 @@ class SwiftJotPopup {
   private handleInput(): void {
     const text = this.textarea.value;
     this.updateCounters(text);
-    this.updateJumpBar(text);
     this.syncHighlights();
     this.setSaveStatus('Saving...');
 
@@ -2352,7 +2359,7 @@ class SwiftJotPopup {
 
     const ts = getTimestampAtPosition(this.textarea.value, pos);
     if (ts) {
-      this.showQuickJump(ts);
+      this.showQuickJump('timestamp', ts);
       // Only jump if the user does Ctrl+Click (or Cmd+Click) on the timestamp
       if (e.ctrlKey || e.metaKey) {
         await this.seekVideo(ts);
@@ -2364,42 +2371,73 @@ class SwiftJotPopup {
 
   private checkCursorTimestamp(): void {
     const pos = this.textarea.selectionStart;
-    const ts = getTimestampAtPosition(this.textarea.value, pos);
+    const text = this.textarea.value;
+
+    const ts = getTimestampAtPosition(text, pos);
     if (ts) {
-      this.showQuickJump(ts);
-    } else {
-      this.hideQuickJump();
-    }
-  }
-
-  private showQuickJump(timestamp: string): void {
-    this.activeTimestamp = timestamp;
-    this.quickJumpBtn.disabled = false;
-    this.quickJumpBtn.classList.remove('disabled');
-    this.quickJumpBtn.title = `Jump media to ${timestamp}`;
-  }
-
-  private hideQuickJump(): void {
-    this.updateJumpBar(this.textarea.value);
-  }
-
-  private updateJumpBar(text: string): void {
-    const timestamps = extractTimestamps(text);
-    if (timestamps.length === 0) {
-      this.activeTimestamp = null;
-      this.quickJumpBtn.disabled = true;
-      this.quickJumpBtn.classList.add('disabled');
-      this.quickJumpBtn.title = 'Select or place cursor on a timestamp to jump';
+      this.showQuickJump('timestamp', ts);
       return;
     }
 
-    if (!this.activeTimestamp || !timestamps.includes(this.activeTimestamp)) {
-      this.activeTimestamp = timestamps[0];
+    const ytUrl = getYouTubeUrlAtPosition(text, pos);
+    if (ytUrl) {
+      this.showQuickJump('youtube', ytUrl);
+      return;
     }
 
+    const fbUrl = getFacebookUrlAtPosition(text, pos);
+    if (fbUrl) {
+      this.showQuickJump('facebook', fbUrl);
+      return;
+    }
+
+    const localUrl = getLocalMediaUrlAtPosition(text, pos);
+    if (localUrl) {
+      this.showQuickJump('local-media', localUrl);
+      return;
+    }
+
+    this.hideQuickJump();
+  }
+
+  private static readonly JUMP_TYPE_CLASSES = ['jump-timestamp', 'jump-youtube', 'jump-facebook', 'jump-local-media'] as const;
+
+  private showQuickJump(type: 'timestamp' | 'youtube' | 'facebook' | 'local-media', value: string): void {
+    this.jumpTarget = { type, value };
     this.quickJumpBtn.disabled = false;
     this.quickJumpBtn.classList.remove('disabled');
-    this.quickJumpBtn.title = `Jump media to ${this.activeTimestamp}`;
+
+    // Swap color class
+    this.quickJumpBtn.classList.remove(...SwiftJotPopup.JUMP_TYPE_CLASSES);
+    this.quickJumpBtn.classList.add(`jump-${type}`);
+
+    // Set contextual title and label
+    const jumpLabel = this.quickJumpBtn.querySelector('span');
+    switch (type) {
+      case 'timestamp':
+        this.quickJumpBtn.title = `Jump media to ${value}`;
+        if (jumpLabel) jumpLabel.textContent = 'Jump';
+        break;
+      case 'youtube':
+        this.quickJumpBtn.title = `Open YouTube video`;
+        if (jumpLabel) jumpLabel.textContent = 'Open';
+        break;
+      case 'facebook':
+        this.quickJumpBtn.title = `Open Facebook link`;
+        if (jumpLabel) jumpLabel.textContent = 'Open';
+        break;
+      case 'local-media':
+        this.quickJumpBtn.title = `Open local media file`;
+        if (jumpLabel) jumpLabel.textContent = 'Open';
+        break;
+    }
+  }
+
+  private hideQuickJump(): void {
+    this.jumpTarget = null;
+    this.quickJumpBtn.disabled = true;
+    this.quickJumpBtn.classList.add('disabled');
+    this.quickJumpBtn.title = 'Select or place cursor on a timestamp or link to jump';
   }
 
   private async seekVideo(timestamp: string): Promise<boolean> {
@@ -2618,7 +2656,6 @@ class SwiftJotPopup {
 
     this.textarea.value = '';
     this.updateCounters('');
-    this.updateJumpBar('');
     this.syncHighlights();
     await this.saveNote('');
     this.showToast('Note cleared');
