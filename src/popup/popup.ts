@@ -751,7 +751,7 @@ class SwiftJotPopup {
     });
   }
 
-  private getSelectedOrCursorTimestamp(): string | null {
+  private getAtCursorTimestamp(): string | null {
     const start = this.textarea.selectionStart;
     const end = this.textarea.selectionEnd;
     const text = this.textarea.value;
@@ -771,13 +771,7 @@ class SwiftJotPopup {
         return `${pad(h)}:${pad(m)}:${pad(s)}.${pad(ms, 3)}`;
       }
     }
-
-    const atCursor = getTimestampAtPosition(text, start);
-    if (atCursor) return atCursor;
-
-    if (this.activeTimestamp) return this.activeTimestamp;
-
-    return null;
+    return getTimestampAtPosition(text, start);
   }
 
   private async handleSetA(e?: MouseEvent): Promise<void> {
@@ -793,7 +787,7 @@ class SwiftJotPopup {
       return;
     }
 
-    const ts = this.getSelectedOrCursorTimestamp();
+    const ts = this.getAtCursorTimestamp() ?? (await this.getCurrentMediaTime());
     if (!ts) {
       if (this.posA !== null && this.timestampA) {
         this.showToast(`A is at ${this.timestampA}. Select a timestamp to change.`);
@@ -827,7 +821,7 @@ class SwiftJotPopup {
       return;
     }
 
-    const ts = this.getSelectedOrCursorTimestamp();
+    const ts = this.getAtCursorTimestamp() ?? (await this.getCurrentMediaTime());
     if (!ts) {
       if (this.posB !== null && this.timestampB) {
         this.showToast(`B is at ${this.timestampB}. Select a timestamp to change.`);
@@ -1621,129 +1615,130 @@ class SwiftJotPopup {
     }
   }
 
-  private async insertTimestamp(): Promise<void> {
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab || !tab.id) {
-        this.showToast('No active tab found');
-        return;
+  private async getCurrentMediaTime(): Promise<string | undefined> {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.id) return;
+
+    const onYouTube = isYouTubeUrl(tab.url);
+    const onFacebook = isFacebookUrl(tab.url);
+    const onLocalFile = !!tab.url?.startsWith('file://');
+
+    let currentTime: number | null = null;
+
+    if (onYouTube) {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          const video = (document.querySelector('video.html5-main-video') ||
+            document.querySelector('video')) as HTMLVideoElement | null;
+          if (!video) return null;
+          return video.currentTime;
+        },
+      });
+      currentTime = results?.[0]?.result ?? null;
+    } else if (onFacebook) {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          const videos = Array.from(document.querySelectorAll('video')) as HTMLVideoElement[];
+          if (videos.length === 0) return null;
+          if (videos.length === 1) return videos[0].currentTime;
+
+          // 1. Any currently playing video
+          const playing = videos.find((v) => !v.paused && v.currentTime > 0);
+          if (playing) return playing.currentTime;
+
+          // 2. Video in dialog/modal if visible
+          const dialogVideo = document.querySelector('div[role="dialog"] video') as HTMLVideoElement | null;
+          if (dialogVideo) {
+            const rect = dialogVideo.getBoundingClientRect();
+            if (rect.width > 50 && rect.height > 50 && rect.bottom > 0 && rect.top < window.innerHeight) {
+              return dialogVideo.currentTime;
+            }
+          }
+
+          // 3. Find video closest to viewport center (handles Reels and feed videos even when paused)
+          const viewCenterX = window.innerWidth / 2;
+          const viewCenterY = window.innerHeight / 2;
+
+          let bestVideo: HTMLVideoElement | null = null;
+          let bestScore = -Infinity;
+
+          for (const v of videos) {
+            const rect = v.getBoundingClientRect();
+            const visibleWidth = Math.max(0, Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0));
+            const visibleHeight = Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0));
+            const visibleArea = visibleWidth * visibleHeight;
+            if (visibleArea <= 0) continue;
+
+            const vidCenterX = rect.left + rect.width / 2;
+            const vidCenterY = rect.top + rect.height / 2;
+            const distFromCenter = Math.hypot(vidCenterX - viewCenterX, vidCenterY - viewCenterY);
+
+            let score = visibleArea - distFromCenter * 50;
+            if (v.currentTime > 0) score += 50000;
+            if (!v.paused) score += 500000;
+
+            if (score > bestScore) {
+              bestScore = score;
+              bestVideo = v;
+            }
+          }
+
+          return bestVideo ? bestVideo.currentTime : (videos[0] ? videos[0].currentTime : null);
+        },
+      });
+      currentTime = results?.[0]?.result ?? null;
+    } else {
+      // Local video or audio, or any tab with HTML5 media
+      if (onLocalFile) {
+        const isAllowed = await chrome.extension.isAllowedFileSchemeAccess().catch(() => false);
+        if (!isAllowed) {
+          this.showToast('Please enable "Allow access to file URLs" in chrome://extensions');
+          return;
+        }
       }
 
-      const onYouTube = isYouTubeUrl(tab.url);
-      const onFacebook = isFacebookUrl(tab.url);
-      const onLocalFile = !!tab.url?.startsWith('file://');
-
-      let currentTime: number | null = null;
-
-      if (onYouTube) {
+      try {
         const results = await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           func: () => {
-            const video = (document.querySelector('video.html5-main-video') ||
-              document.querySelector('video')) as HTMLVideoElement | null;
-            if (!video) return null;
-            return video.currentTime;
-          },
-        });
-        currentTime = results?.[0]?.result ?? null;
-      } else if (onFacebook) {
-        const results = await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: () => {
-            const videos = Array.from(document.querySelectorAll('video')) as HTMLVideoElement[];
-            if (videos.length === 0) return null;
-            if (videos.length === 1) return videos[0].currentTime;
+            const mediaElements = Array.from(
+              document.querySelectorAll('video, audio')
+            ) as (HTMLVideoElement | HTMLAudioElement)[];
+            if (mediaElements.length === 0) return null;
 
-            // 1. Any currently playing video
-            const playing = videos.find((v) => !v.paused && v.currentTime > 0);
+            // 1. Any currently playing media
+            const playing = mediaElements.find((m) => !m.paused && m.currentTime > 0);
             if (playing) return playing.currentTime;
 
-            // 2. Video in dialog/modal if visible
-            const dialogVideo = document.querySelector('div[role="dialog"] video') as HTMLVideoElement | null;
-            if (dialogVideo) {
-              const rect = dialogVideo.getBoundingClientRect();
-              if (rect.width > 50 && rect.height > 50 && rect.bottom > 0 && rect.top < window.innerHeight) {
-                return dialogVideo.currentTime;
-              }
-            }
+            // 2. Any media with currentTime > 0
+            const progressing = mediaElements.find((m) => m.currentTime > 0);
+            if (progressing) return progressing.currentTime;
 
-            // 3. Find video closest to viewport center (handles Reels and feed videos even when paused)
-            const viewCenterX = window.innerWidth / 2;
-            const viewCenterY = window.innerHeight / 2;
-
-            let bestVideo: HTMLVideoElement | null = null;
-            let bestScore = -Infinity;
-
-            for (const v of videos) {
-              const rect = v.getBoundingClientRect();
-              const visibleWidth = Math.max(0, Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0));
-              const visibleHeight = Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0));
-              const visibleArea = visibleWidth * visibleHeight;
-              if (visibleArea <= 0) continue;
-
-              const vidCenterX = rect.left + rect.width / 2;
-              const vidCenterY = rect.top + rect.height / 2;
-              const distFromCenter = Math.hypot(vidCenterX - viewCenterX, vidCenterY - viewCenterY);
-
-              let score = visibleArea - distFromCenter * 50;
-              if (v.currentTime > 0) score += 50000;
-              if (!v.paused) score += 500000;
-
-              if (score > bestScore) {
-                bestScore = score;
-                bestVideo = v;
-              }
-            }
-
-            return bestVideo ? bestVideo.currentTime : (videos[0] ? videos[0].currentTime : null);
+            // 3. First media element
+            return mediaElements[0].currentTime;
           },
         });
         currentTime = results?.[0]?.result ?? null;
-      } else {
-        // Local video or audio, or any tab with HTML5 media
-        if (onLocalFile) {
-          const isAllowed = await chrome.extension.isAllowedFileSchemeAccess().catch(() => false);
-          if (!isAllowed) {
-            this.showToast('Please enable "Allow access to file URLs" in chrome://extensions');
-            return;
-          }
-        }
-
-        try {
-          const results = await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            func: () => {
-              const mediaElements = Array.from(
-                document.querySelectorAll('video, audio')
-              ) as (HTMLVideoElement | HTMLAudioElement)[];
-              if (mediaElements.length === 0) return null;
-
-              // 1. Any currently playing media
-              const playing = mediaElements.find((m) => !m.paused && m.currentTime > 0);
-              if (playing) return playing.currentTime;
-
-              // 2. Any media with currentTime > 0
-              const progressing = mediaElements.find((m) => m.currentTime > 0);
-              if (progressing) return progressing.currentTime;
-
-              // 3. First media element
-              return mediaElements[0].currentTime;
-            },
-          });
-          currentTime = results?.[0]?.result ?? null;
-        } catch (scriptErr) {
-          console.error('Failed to query local media currentTime:', scriptErr);
-        }
+      } catch (scriptErr) {
+        console.error('Failed to query local media currentTime:', scriptErr);
       }
+    }
 
-      if (typeof currentTime !== 'number' || isNaN(currentTime)) {
+    if (typeof currentTime !== 'number' || isNaN(currentTime)) return;
+    return formatTimestamp(currentTime);
+  }
+
+  private async insertTimestamp(): Promise<void> {
+    try {
+      const currentTime = await this.getCurrentMediaTime();
+      if (!currentTime) {
         this.showToast('No video or audio found on page');
         return;
       }
-
-      const formatted = formatTimestamp(currentTime);
-      this.insertTextAtCursor(`${formatted} `);
-      this.showToast(`Inserted: ${formatted}`);
+      this.insertTextAtCursor(`${currentTime} `);
+      this.showToast(`Inserted: ${currentTime}`);
     } catch (error) {
       console.error('Failed to fetch media timestamp:', error);
       this.showToast('Could not fetch timestamp');
