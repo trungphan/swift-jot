@@ -49,6 +49,21 @@ body {
   user-select: none;
 }
 
+body.freely-positioned {
+  width: 100vw !important;
+  height: 100vh !important;
+  min-width: 340px;
+  min-height: 280px;
+}
+
+body.freely-positioned #window-state-btn {
+  color: var(--accent-color);
+}
+
+body.freely-positioned #window-state-btn:hover {
+  background-color: var(--accent-light);
+}
+
 .app-container {
   display: flex;
   flex-direction: column;
@@ -62,6 +77,16 @@ body {
   padding: 10px 14px;
   border-bottom: 1px solid var(--border-color);
   background: var(--bg-secondary);
+  cursor: grab;
+  user-select: none;
+}
+
+.app-header.dragging {
+  cursor: grabbing;
+}
+
+.app-header .header-actions {
+  cursor: default;
 }
 
 .brand {
@@ -222,12 +247,9 @@ body {
   border-bottom: 1px solid var(--border-color);
   animation: fadeIn 0.15s ease;
   gap: 6px;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.timestamp-bar::-webkit-scrollbar {
-  display: none;
+  overflow: visible;
+  position: relative;
+  z-index: 10;
 }
 
 .timestamp-bar.hidden {
@@ -301,6 +323,96 @@ body {
   background: rgba(245, 158, 11, 0.18);
   border-color: #d97706;
   color: #92400e;
+}
+
+/* Rewind Split Button & Dropdown */
+.rewind-group {
+  display: inline-flex;
+  align-items: stretch;
+  position: relative;
+}
+
+.rewind-group .rewind-btn {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: none;
+  padding-right: 5px;
+}
+
+.rewind-group .rewind-dropdown-btn {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  padding: 3px 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.rewind-group .rewind-dropdown-btn:hover {
+  color: var(--text-primary);
+}
+
+.rewind-group .rewind-dropdown-btn.active {
+  background: var(--border-color);
+  color: var(--text-primary);
+}
+
+.rewind-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 72px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.08);
+  padding: 3px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: dropdownFadeIn 0.12s ease;
+}
+
+@keyframes dropdownFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.rewind-dropdown-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 0.1s ease, color 0.1s ease;
+}
+
+.rewind-dropdown-item:hover {
+  background-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+.rewind-dropdown-item.active {
+  background-color: var(--accent-light);
+  color: var(--accent-color);
+  font-weight: 700;
 }
 
 /* Play/Pause Button */
@@ -433,6 +545,8 @@ body {
   caret-color: var(--text-primary);
   resize: none;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.3) transparent;
   user-select: text;
   z-index: 2;
 }

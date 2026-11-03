@@ -14,12 +14,26 @@ interface LoopState {
 interface StorageData {
   swiftJotNote?: string;
   swiftJotPopupSize?: PopupSize;
+  swiftJotSnappedSize?: PopupSize;
+  swiftJotDetachedSize?: PopupSize;
+  swiftJotDetachedPosition?: { left: number; top: number };
+  swiftJotWindowState?: 'snapped' | 'freely-positioned';
+  swiftJotDetachedWindowId?: number | null;
   swiftJotLoopState?: LoopState;
+  swiftJotRewindSeconds?: number;
 }
 
 const STORAGE_KEY = 'swiftJotNote';
 const POPUP_SIZE_KEY = 'swiftJotPopupSize';
+const SNAPPED_SIZE_KEY = 'swiftJotSnappedSize';
+const DETACHED_SIZE_KEY = 'swiftJotDetachedSize';
+const DETACHED_POS_KEY = 'swiftJotDetachedPosition';
+const WINDOW_STATE_KEY = 'swiftJotWindowState';
+const DETACHED_WINDOW_ID_KEY = 'swiftJotDetachedWindowId';
 const LOOP_STATE_KEY = 'swiftJotLoopState';
+const REWIND_SECONDS_KEY = 'swiftJotRewindSeconds';
+const VALID_REWIND_SECONDS = [1, 5, 10, 20, 30, 60];
+const DEFAULT_REWIND_SECONDS = 10;
 const DEBOUNCE_DELAY_MS = 300;
 
 const DEFAULT_WIDTH = 380;
@@ -421,9 +435,19 @@ class SwiftJotPopup {
   private timestampBtn: HTMLButtonElement;
   private copyBtn: HTMLButtonElement;
   private clearBtn: HTMLButtonElement;
+  private windowStateBtn: HTMLButtonElement;
+  private detachIcon: SVGElement;
+  private snapIcon: SVGElement;
+  private isDetachedMode: boolean = false;
+  private currentDetachedLeft: number | null = null;
+  private currentDetachedTop: number | null = null;
   private toastEl: HTMLElement;
   private quickJumpBtn: HTMLButtonElement;
   private back10sBtn: HTMLButtonElement;
+  private backSecondsLabel: HTMLElement;
+  private rewindDropdownBtn: HTMLButtonElement;
+  private rewindDropdownMenu: HTMLElement;
+  private rewindSeconds: number = DEFAULT_REWIND_SECONDS;
   private playPauseBtn: HTMLButtonElement;
   private playIcon: SVGElement;
   private pauseIcon: SVGElement;
@@ -447,6 +471,7 @@ class SwiftJotPopup {
   private toastTimeout: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
+    this.isDetachedMode = window.location.search.includes('mode=detached');
     this.textarea = document.getElementById('note-textarea') as HTMLTextAreaElement;
     this.highlightLayer = document.getElementById('highlight-layer') as HTMLElement;
     this.saveStatus = document.getElementById('save-status') as HTMLElement;
@@ -456,9 +481,15 @@ class SwiftJotPopup {
     this.timestampBtn = document.getElementById('timestamp-btn') as HTMLButtonElement;
     this.copyBtn = document.getElementById('copy-btn') as HTMLButtonElement;
     this.clearBtn = document.getElementById('clear-btn') as HTMLButtonElement;
+    this.windowStateBtn = document.getElementById('window-state-btn') as HTMLButtonElement;
+    this.detachIcon = document.getElementById('detach-icon') as unknown as SVGElement;
+    this.snapIcon = document.getElementById('snap-icon') as unknown as SVGElement;
     this.toastEl = document.getElementById('toast') as HTMLElement;
     this.quickJumpBtn = document.getElementById('quick-jump-btn') as HTMLButtonElement;
     this.back10sBtn = document.getElementById('back-10s-btn') as HTMLButtonElement;
+    this.backSecondsLabel = document.getElementById('back-seconds-label') as HTMLElement;
+    this.rewindDropdownBtn = document.getElementById('rewind-dropdown-btn') as HTMLButtonElement;
+    this.rewindDropdownMenu = document.getElementById('rewind-dropdown-menu') as HTMLElement;
     this.playPauseBtn = document.getElementById('play-pause-btn') as HTMLButtonElement;
     this.playIcon = document.getElementById('play-icon') as unknown as SVGElement;
     this.pauseIcon = document.getElementById('pause-icon') as unknown as SVGElement;
@@ -475,26 +506,174 @@ class SwiftJotPopup {
   }
 
   private async init(): Promise<void> {
+    this.updateWindowStateUI();
     await this.loadPopupSize();
+    await this.loadRewindSeconds();
     await this.loadNote();
     await this.loadLoopState();
     this.bindEvents();
     this.setupResizeHandles();
+    this.setupTitleBarDrag();
+    this.setupStorageSync();
     this.updateCounters(this.textarea.value);
     this.updateJumpBar(this.textarea.value);
     this.syncHighlights();
     await this.checkActiveMediaStatus();
+
+    if (this.isDetachedMode) {
+      await this.initDetachedWindowTracking();
+    } else {
+      await chrome.storage.local.set({
+        [WINDOW_STATE_KEY]: 'snapped',
+        [DETACHED_WINDOW_ID_KEY]: null,
+      });
+      await chrome.action.setPopup({ popup: 'src/popup/popup.html' });
+    }
+  }
+
+  private updateWindowStateUI(): void {
+    if (this.isDetachedMode) {
+      document.body.classList.add('freely-positioned');
+      this.detachIcon.classList.add('hidden');
+      this.snapIcon.classList.remove('hidden');
+      this.windowStateBtn.title = 'Snap to extension button';
+      this.windowStateBtn.setAttribute('aria-label', 'Snap to extension button');
+    } else {
+      document.body.classList.remove('freely-positioned');
+      this.detachIcon.classList.remove('hidden');
+      this.snapIcon.classList.add('hidden');
+      this.windowStateBtn.title = 'Freely position window (click or drag title bar)';
+      this.windowStateBtn.setAttribute('aria-label', 'Freely position window');
+    }
+  }
+
+  private async loadRewindSeconds(): Promise<void> {
+    try {
+      const data = (await chrome.storage.local.get(REWIND_SECONDS_KEY)) as StorageData;
+      const sec = data?.[REWIND_SECONDS_KEY];
+      if (typeof sec === 'number' && VALID_REWIND_SECONDS.includes(sec)) {
+        this.rewindSeconds = sec;
+      } else {
+        this.rewindSeconds = DEFAULT_REWIND_SECONDS;
+      }
+      this.updateRewindUI();
+    } catch (err) {
+      console.error('Failed to load rewind seconds:', err);
+    }
+  }
+
+  private updateRewindUI(): void {
+    if (this.backSecondsLabel) {
+      this.backSecondsLabel.textContent = `-${this.rewindSeconds}s`;
+    }
+    if (this.back10sBtn) {
+      this.back10sBtn.title = `Rewind ${this.rewindSeconds} seconds (-${this.rewindSeconds}s)`;
+      this.back10sBtn.setAttribute('aria-label', `Rewind ${this.rewindSeconds} seconds`);
+    }
+
+    if (this.rewindDropdownMenu) {
+      const items = this.rewindDropdownMenu.querySelectorAll('.rewind-dropdown-item');
+      items.forEach((item) => {
+        const sec = parseInt(item.getAttribute('data-seconds') || '0', 10);
+        if (sec === this.rewindSeconds) {
+          item.classList.add('active');
+          item.setAttribute('aria-selected', 'true');
+        } else {
+          item.classList.remove('active');
+          item.setAttribute('aria-selected', 'false');
+        }
+      });
+    }
+  }
+
+  private async setRewindSeconds(seconds: number): Promise<void> {
+    if (!VALID_REWIND_SECONDS.includes(seconds)) return;
+    this.rewindSeconds = seconds;
+    this.updateRewindUI();
+    this.closeRewindDropdown();
+    try {
+      await chrome.storage.local.set({ [REWIND_SECONDS_KEY]: seconds });
+      this.showToast(`Rewind set to -${seconds}s`);
+    } catch (err) {
+      console.error('Failed to save rewind seconds:', err);
+    }
+  }
+
+  private toggleRewindDropdown(): void {
+    if (!this.rewindDropdownMenu) return;
+    const isHidden = this.rewindDropdownMenu.classList.contains('hidden');
+    if (isHidden) {
+      this.openRewindDropdown();
+    } else {
+      this.closeRewindDropdown();
+    }
+  }
+
+  private openRewindDropdown(): void {
+    if (!this.rewindDropdownMenu || !this.rewindDropdownBtn) return;
+    this.rewindDropdownMenu.classList.remove('hidden');
+    this.rewindDropdownBtn.classList.add('active');
+    this.rewindDropdownBtn.setAttribute('aria-expanded', 'true');
+  }
+
+  private closeRewindDropdown(): void {
+    if (!this.rewindDropdownMenu || !this.rewindDropdownBtn) return;
+    this.rewindDropdownMenu.classList.add('hidden');
+    this.rewindDropdownBtn.classList.remove('active');
+    this.rewindDropdownBtn.setAttribute('aria-expanded', 'false');
+  }
+
+  private async initDetachedWindowTracking(): Promise<void> {
+    try {
+      const currentWin = await chrome.windows.getCurrent();
+      if (typeof currentWin.left === 'number') this.currentDetachedLeft = currentWin.left;
+      if (typeof currentWin.top === 'number') this.currentDetachedTop = currentWin.top;
+
+      if (currentWin.id) {
+        await chrome.storage.local.set({
+          [WINDOW_STATE_KEY]: 'freely-positioned',
+          [DETACHED_WINDOW_ID_KEY]: currentWin.id,
+        });
+        await chrome.action.setPopup({ popup: '' });
+      }
+
+      let windowResizeTimeout: ReturnType<typeof setTimeout> | null = null;
+      window.addEventListener('resize', () => {
+        this.syncHighlights();
+        if (windowResizeTimeout) clearTimeout(windowResizeTimeout);
+        windowResizeTimeout = setTimeout(async () => {
+          const w = window.outerWidth;
+          const h = window.outerHeight;
+          if (w >= MIN_WIDTH && h >= MIN_HEIGHT) {
+            await chrome.storage.local.set({
+              [DETACHED_SIZE_KEY]: { width: w, height: h },
+            });
+          }
+        }, 200);
+      });
+    } catch (err) {
+      console.error('Failed to init detached window tracking:', err);
+    }
   }
 
   private async loadPopupSize(): Promise<void> {
     try {
-      const data = (await chrome.storage.local.get(POPUP_SIZE_KEY)) as StorageData;
-      const size = data?.swiftJotPopupSize;
+      if (this.isDetachedMode) {
+        document.body.style.width = '100vw';
+        document.body.style.height = '100vh';
+        return;
+      }
+
+      const data = (await chrome.storage.local.get([SNAPPED_SIZE_KEY, POPUP_SIZE_KEY])) as StorageData;
+      const size = data?.[SNAPPED_SIZE_KEY] || data?.swiftJotPopupSize;
       if (size && typeof size.width === 'number' && typeof size.height === 'number') {
         const w = Math.min(Math.max(size.width, MIN_WIDTH), MAX_WIDTH);
         const h = Math.min(Math.max(size.height, MIN_HEIGHT), MAX_HEIGHT);
         document.body.style.width = `${w}px`;
         document.body.style.height = `${h}px`;
+      } else {
+        document.body.style.width = `${DEFAULT_WIDTH}px`;
+        document.body.style.height = `${DEFAULT_HEIGHT}px`;
       }
     } catch (err) {
       console.error('Failed to load popup size:', err);
@@ -503,10 +682,242 @@ class SwiftJotPopup {
 
   private async savePopupSize(width: number, height: number): Promise<void> {
     try {
-      await chrome.storage.local.set({ [POPUP_SIZE_KEY]: { width, height } });
+      if (this.isDetachedMode) {
+        await chrome.storage.local.set({ [DETACHED_SIZE_KEY]: { width, height } });
+      } else {
+        await chrome.storage.local.set({
+          [SNAPPED_SIZE_KEY]: { width, height },
+          [POPUP_SIZE_KEY]: { width, height },
+        });
+      }
     } catch (err) {
       console.error('Failed to save popup size:', err);
     }
+  }
+
+  private async switchToFreelyPositioned(targetLeft?: number, targetTop?: number): Promise<void> {
+    await this.saveNote(this.textarea.value);
+
+    // Save and remember the current snapped window size
+    const snappedWidth = document.body.offsetWidth || DEFAULT_WIDTH;
+    const snappedHeight = document.body.offsetHeight || DEFAULT_HEIGHT;
+    await chrome.storage.local.set({
+      [SNAPPED_SIZE_KEY]: { width: snappedWidth, height: snappedHeight },
+      [POPUP_SIZE_KEY]: { width: snappedWidth, height: snappedHeight },
+    });
+
+    let left = targetLeft;
+    let top = targetTop;
+
+    if (typeof left !== 'number' || typeof top !== 'number') {
+      const savedPos = (await chrome.storage.local.get(DETACHED_POS_KEY)) as StorageData;
+      const pos = savedPos?.[DETACHED_POS_KEY];
+      if (pos && typeof pos.left === 'number' && typeof pos.top === 'number') {
+        left = pos.left;
+        top = pos.top;
+      } else {
+        left = window.screenX || 100;
+        top = window.screenY || 100;
+      }
+    }
+
+    const savedSize = (await chrome.storage.local.get(DETACHED_SIZE_KEY)) as StorageData;
+    const detachedSize = savedSize?.[DETACHED_SIZE_KEY];
+    const width = detachedSize && typeof detachedSize.width === 'number'
+      ? detachedSize.width
+      : snappedWidth;
+    const height = detachedSize && typeof detachedSize.height === 'number'
+      ? detachedSize.height
+      : snappedHeight;
+
+    try {
+      const win = await chrome.windows.create({
+        url: chrome.runtime.getURL('src/popup/popup.html?mode=detached'),
+        type: 'popup',
+        left: Math.round(left),
+        top: Math.round(top),
+        width: Math.round(width),
+        height: Math.round(height),
+        focused: true,
+      });
+
+      if (win?.id) {
+        await chrome.storage.local.set({
+          [WINDOW_STATE_KEY]: 'freely-positioned',
+          [DETACHED_WINDOW_ID_KEY]: win.id,
+          [DETACHED_POS_KEY]: { left: Math.round(left), top: Math.round(top) },
+        });
+        await chrome.action.setPopup({ popup: '' });
+      }
+    } catch (err) {
+      console.error('Failed to create detached window:', err);
+    }
+
+    window.close();
+  }
+
+  private async switchToSnapped(): Promise<void> {
+    await this.saveNote(this.textarea.value);
+
+    try {
+      const currentWin = await chrome.windows.getCurrent();
+      if (currentWin) {
+        if (typeof currentWin.left === 'number' && typeof currentWin.top === 'number') {
+          await chrome.storage.local.set({
+            [DETACHED_POS_KEY]: { left: currentWin.left, top: currentWin.top },
+          });
+        }
+        if (typeof currentWin.width === 'number' && typeof currentWin.height === 'number') {
+          await chrome.storage.local.set({
+            [DETACHED_SIZE_KEY]: { width: currentWin.width, height: currentWin.height },
+          });
+        }
+      }
+    } catch (err) {
+      console.error('Failed to get current window bounds:', err);
+    }
+
+    await chrome.storage.local.set({
+      [WINDOW_STATE_KEY]: 'snapped',
+      [DETACHED_WINDOW_ID_KEY]: null,
+    });
+
+    await chrome.action.setPopup({ popup: 'src/popup/popup.html' });
+    chrome.runtime.sendMessage({ type: 'SNAP_TO_BUTTON' });
+
+    window.close();
+  }
+
+  private setupTitleBarDrag(): void {
+    const header = document.querySelector('.app-header') as HTMLElement;
+    if (!header) return;
+
+    let isDragging = false;
+    let startScreenMouseX = 0;
+    let startScreenMouseY = 0;
+    let startOuterX = 0;
+    let startOuterY = 0;
+    let rafId: number | null = null;
+    let pendingLeft: number | null = null;
+    let pendingTop: number | null = null;
+
+    header.addEventListener('pointerdown', async (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      const target = e.target as HTMLElement;
+      if (target.closest('.header-actions') || target.closest('button')) {
+        return;
+      }
+
+      startScreenMouseX = e.screenX;
+      startScreenMouseY = e.screenY;
+
+      if (this.isDetachedMode) {
+        e.preventDefault();
+        try {
+          header.setPointerCapture(e.pointerId);
+        } catch {}
+        isDragging = true;
+        header.classList.add('dragging');
+
+        if (typeof this.currentDetachedLeft === 'number' && typeof this.currentDetachedTop === 'number') {
+          startOuterX = this.currentDetachedLeft;
+          startOuterY = this.currentDetachedTop;
+        } else {
+          startOuterX = window.screenX;
+          startOuterY = window.screenY;
+        }
+      } else {
+        isDragging = true;
+        try {
+          header.setPointerCapture(e.pointerId);
+        } catch {}
+        startOuterX = window.screenX;
+        startOuterY = window.screenY;
+      }
+    });
+
+    header.addEventListener('pointermove', async (e: PointerEvent) => {
+      if (!isDragging) return;
+
+      if (!this.isDetachedMode) {
+        const dist = Math.hypot(e.screenX - startScreenMouseX, e.screenY - startScreenMouseY);
+        if (dist >= 5) {
+          isDragging = false;
+          try {
+            header.releasePointerCapture(e.pointerId);
+          } catch {}
+
+          const deltaX = e.screenX - startScreenMouseX;
+          const deltaY = e.screenY - startScreenMouseY;
+          const targetLeft = Math.round(startOuterX + deltaX);
+          const targetTop = Math.round(startOuterY + deltaY);
+
+          await this.switchToFreelyPositioned(targetLeft, targetTop);
+        }
+        return;
+      }
+
+      e.preventDefault();
+      const deltaX = e.screenX - startScreenMouseX;
+      const deltaY = e.screenY - startScreenMouseY;
+      const targetLeft = Math.round(startOuterX + deltaX);
+      const targetTop = Math.round(startOuterY + deltaY);
+
+      this.currentDetachedLeft = targetLeft;
+      this.currentDetachedTop = targetTop;
+      pendingLeft = targetLeft;
+      pendingTop = targetTop;
+
+      if (rafId === null) {
+        rafId = requestAnimationFrame(async () => {
+          rafId = null;
+          if (pendingLeft !== null && pendingTop !== null && isDragging) {
+            const currentWin = await chrome.windows.getCurrent();
+            if (currentWin.id) {
+              await chrome.windows.update(currentWin.id, {
+                left: pendingLeft,
+                top: pendingTop,
+              }).catch(() => {});
+            }
+          }
+        });
+      }
+    });
+
+    const stopDrag = async (e: PointerEvent) => {
+      if (!isDragging) return;
+      isDragging = false;
+      try {
+        header.releasePointerCapture(e.pointerId);
+      } catch {}
+      header.classList.remove('dragging');
+
+      if (this.isDetachedMode && pendingLeft !== null && pendingTop !== null) {
+        await chrome.storage.local.set({
+          [DETACHED_POS_KEY]: { left: pendingLeft, top: pendingTop },
+        });
+      }
+    };
+
+    header.addEventListener('pointerup', stopDrag);
+    header.addEventListener('pointercancel', stopDrag);
+  }
+
+  private setupStorageSync(): void {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local' && changes[STORAGE_KEY]) {
+        const newVal = changes[STORAGE_KEY].newValue;
+        if (typeof newVal === 'string' && newVal !== this.textarea.value) {
+          const start = this.textarea.selectionStart;
+          const end = this.textarea.selectionEnd;
+          this.textarea.value = newVal;
+          this.textarea.setSelectionRange(start, end);
+          this.updateCounters(newVal);
+          this.updateJumpBar(newVal);
+          this.syncHighlights();
+        }
+      }
+    });
   }
 
   private async loadLoopState(): Promise<void> {
@@ -563,9 +974,22 @@ class SwiftJotPopup {
     this.setupSingleResizeHandle(this.resizeHandleLeft, 'left');
 
     const resetToDefault = async () => {
-      document.body.style.width = `${DEFAULT_WIDTH}px`;
-      document.body.style.height = `${DEFAULT_HEIGHT}px`;
-      await this.savePopupSize(DEFAULT_WIDTH, DEFAULT_HEIGHT);
+      if (this.isDetachedMode) {
+        const currentWin = await chrome.windows.getCurrent();
+        if (currentWin.id) {
+          await chrome.windows.update(currentWin.id, {
+            width: DEFAULT_WIDTH,
+            height: DEFAULT_HEIGHT,
+          }).catch(() => {});
+        }
+        await chrome.storage.local.set({
+          [DETACHED_SIZE_KEY]: { width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT },
+        });
+      } else {
+        document.body.style.width = `${DEFAULT_WIDTH}px`;
+        document.body.style.height = `${DEFAULT_HEIGHT}px`;
+        await this.savePopupSize(DEFAULT_WIDTH, DEFAULT_HEIGHT);
+      }
       this.syncHighlights();
       this.showToast('Reset window to default size');
     };
@@ -582,6 +1006,9 @@ class SwiftJotPopup {
     let startHeight = 0;
     let currentWidth = DEFAULT_WIDTH;
     let currentHeight = DEFAULT_HEIGHT;
+    let resizeRafId: number | null = null;
+    let pendingResizeWidth: number | null = null;
+    let pendingResizeHeight: number | null = null;
 
     handle.addEventListener('pointerdown', (e: PointerEvent) => {
       if (e.button !== 0) return;
@@ -610,11 +1037,34 @@ class SwiftJotPopup {
       const deltaX = side === 'right' ? e.clientX - startX : startX - e.clientX;
       const deltaY = e.clientY - startY;
 
-      currentWidth = Math.min(Math.max(startWidth + deltaX, MIN_WIDTH), MAX_WIDTH);
-      currentHeight = Math.min(Math.max(startHeight + deltaY, MIN_HEIGHT), MAX_HEIGHT);
+      if (this.isDetachedMode) {
+        currentWidth = Math.max(startWidth + deltaX, MIN_WIDTH);
+        currentHeight = Math.max(startHeight + deltaY, MIN_HEIGHT);
 
-      document.body.style.width = `${currentWidth}px`;
-      document.body.style.height = `${currentHeight}px`;
+        pendingResizeWidth = Math.round(currentWidth);
+        pendingResizeHeight = Math.round(currentHeight);
+
+        if (resizeRafId === null) {
+          resizeRafId = requestAnimationFrame(async () => {
+            resizeRafId = null;
+            if (pendingResizeWidth !== null && pendingResizeHeight !== null && isDragging) {
+              const currentWin = await chrome.windows.getCurrent();
+              if (currentWin.id) {
+                await chrome.windows.update(currentWin.id, {
+                  width: pendingResizeWidth,
+                  height: pendingResizeHeight,
+                }).catch(() => {});
+              }
+            }
+          });
+        }
+      } else {
+        currentWidth = Math.min(Math.max(startWidth + deltaX, MIN_WIDTH), MAX_WIDTH);
+        currentHeight = Math.min(Math.max(startHeight + deltaY, MIN_HEIGHT), MAX_HEIGHT);
+
+        document.body.style.width = `${currentWidth}px`;
+        document.body.style.height = `${currentHeight}px`;
+      }
 
       this.syncHighlights();
     });
@@ -630,7 +1080,16 @@ class SwiftJotPopup {
       handle.classList.remove('resizing');
       document.body.style.userSelect = '';
 
-      await this.savePopupSize(currentWidth, currentHeight);
+      if (this.isDetachedMode) {
+        await chrome.storage.local.set({
+          [DETACHED_SIZE_KEY]: {
+            width: Math.round(currentWidth),
+            height: Math.round(currentHeight),
+          },
+        });
+      } else {
+        await this.savePopupSize(currentWidth, currentHeight);
+      }
       this.syncHighlights();
     };
 
@@ -677,7 +1136,32 @@ class SwiftJotPopup {
     });
 
     this.back10sBtn.addEventListener('click', async () => {
-      await this.handleBack10s();
+      await this.handleRewind();
+    });
+
+    this.back10sBtn.addEventListener('contextmenu', (e: MouseEvent) => {
+      e.preventDefault();
+      this.toggleRewindDropdown();
+    });
+
+    this.rewindDropdownBtn.addEventListener('click', (e: MouseEvent) => {
+      e.stopPropagation();
+      this.toggleRewindDropdown();
+    });
+
+    this.rewindDropdownMenu.addEventListener('click', async (e: MouseEvent) => {
+      const target = (e.target as HTMLElement).closest('.rewind-dropdown-item') as HTMLElement | null;
+      if (target) {
+        const sec = parseInt(target.getAttribute('data-seconds') || '10', 10);
+        await this.setRewindSeconds(sec);
+      }
+    });
+
+    document.addEventListener('click', (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.rewind-group')) {
+        this.closeRewindDropdown();
+      }
     });
 
     this.playPauseBtn.addEventListener('click', async () => {
@@ -722,10 +1206,29 @@ class SwiftJotPopup {
       await this.clearNote();
     });
 
+    this.windowStateBtn.addEventListener('click', async () => {
+      if (this.isDetachedMode) {
+        await this.switchToSnapped();
+      } else {
+        await this.switchToFreelyPositioned();
+      }
+    });
+
     document.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && this.rewindDropdownMenu && !this.rewindDropdownMenu.classList.contains('hidden')) {
+        this.closeRewindDropdown();
+        return;
+      }
       if (e.altKey && (e.key === 't' || e.key === 'T')) {
         e.preventDefault();
         this.insertTimestamp();
+      } else if (e.altKey && (e.key === 'w' || e.key === 'W')) {
+        e.preventDefault();
+        if (this.isDetachedMode) {
+          this.switchToSnapped();
+        } else {
+          this.switchToFreelyPositioned();
+        }
       } else if (e.altKey && (e.key === 'p' || e.key === 'P')) {
         e.preventDefault();
         this.handlePlayPause();
@@ -871,9 +1374,36 @@ class SwiftJotPopup {
     }
   }
 
+  private async getActiveTab(): Promise<chrome.tabs.Tab | null> {
+    try {
+      if (this.isDetachedMode) {
+        const normalWindows = await chrome.windows.getAll({ windowTypes: ['normal'] });
+        const focusedNormal = normalWindows.find((w) => w.focused);
+        if (focusedNormal?.id) {
+          const [tab] = await chrome.tabs.query({ active: true, windowId: focusedNormal.id });
+          if (tab) return tab;
+        }
+        const lastFocused = await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => null);
+        if (lastFocused?.id) {
+          const [tab] = await chrome.tabs.query({ active: true, windowId: lastFocused.id });
+          if (tab) return tab;
+        }
+        if (normalWindows[0]?.id) {
+          const [tab] = await chrome.tabs.query({ active: true, windowId: normalWindows[0].id });
+          if (tab) return tab;
+        }
+      }
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      return tab || null;
+    } catch (err) {
+      console.error('Failed to get active tab:', err);
+      return null;
+    }
+  }
+
   private async handlePlayPause(): Promise<void> {
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab = await this.getActiveTab();
       if (!tab || !tab.id) {
         this.showToast('No active tab found');
         return;
@@ -995,9 +1525,9 @@ class SwiftJotPopup {
     }
   }
 
-  private async handleBack10s(): Promise<void> {
+  private async handleRewind(): Promise<void> {
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab = await this.getActiveTab();
       if (!tab || !tab.id) {
         this.showToast('No active tab found');
         return;
@@ -1012,11 +1542,12 @@ class SwiftJotPopup {
       }
 
       const boundA = this.posA;
+      const rewindSecs = this.rewindSeconds;
 
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        args: [boundA],
-        func: (boundAVal: number | null) => {
+        args: [boundA, rewindSecs],
+        func: (boundAVal: number | null, rewindAmount: number) => {
           function findMedia(): HTMLMediaElement | null {
             const yt = document.querySelector('video.html5-main-video') as HTMLVideoElement | null;
             if (yt) return yt;
@@ -1033,7 +1564,7 @@ class SwiftJotPopup {
           if (!media) return { success: false, reason: 'No media player found in tab' };
 
           const minA = boundAVal !== null ? Math.max(boundAVal, 0) : 0;
-          const targetTime = Math.max(media.currentTime - 10, minA);
+          const targetTime = Math.max(media.currentTime - rewindAmount, minA);
           media.currentTime = targetTime;
           media.dispatchEvent(new Event('seeking', { bubbles: true }));
           media.dispatchEvent(new Event('seeked', { bubbles: true }));
@@ -1046,19 +1577,19 @@ class SwiftJotPopup {
       const res = results?.[0]?.result;
       if (res && res.success && typeof res.newTime === 'number') {
         const formatted = formatShortDisplay(res.newTime);
-        this.showToast(`Rewound -10s (${formatted})`);
+        this.showToast(`Rewound -${rewindSecs}s (${formatted})`);
       } else {
         this.showToast(res?.reason || 'No media player found in tab');
       }
     } catch (err) {
-      console.error('Failed to rewind 10s:', err);
+      console.error(`Failed to rewind ${this.rewindSeconds}s:`, err);
       this.showToast('Failed to rewind');
     }
   }
 
   private async syncLoopSettingsToTab(): Promise<void> {
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab = await this.getActiveTab();
       if (!tab || !tab.id) return;
 
       if (tab.url?.startsWith('file://')) {
@@ -1122,7 +1653,7 @@ class SwiftJotPopup {
 
   private async checkActiveMediaStatus(): Promise<void> {
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab = await this.getActiveTab();
       if (!tab) return;
 
       this.mediaLinkBtn.classList.remove('has-youtube', 'has-facebook', 'has-local-media', 'has-media');
@@ -1205,7 +1736,7 @@ class SwiftJotPopup {
 
   private async insertMediaLink(): Promise<void> {
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab = await this.getActiveTab();
       if (!tab || !tab.id) {
         this.showToast('No active tab found');
         return;
@@ -1306,9 +1837,9 @@ class SwiftJotPopup {
         this.showToast('Please enable "Allow access to file URLs" in chrome://extensions');
       }
 
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab = await this.getActiveTab();
       if (!tab || !tab.id) {
-        await chrome.tabs.create({ url: targetUrl });
+        await chrome.tabs.create({ windowId: tab?.windowId, url: targetUrl });
         this.showToast('Opening media in new tab...');
         return;
       }
@@ -1376,7 +1907,7 @@ class SwiftJotPopup {
 
   private async insertYouTubeVideoUrl(): Promise<void> {
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab = await this.getActiveTab();
       if (!tab || !tab.id) {
         this.showToast('No active tab found');
         return;
@@ -1460,12 +1991,12 @@ class SwiftJotPopup {
   private async openYouTubeVideo(url: string): Promise<void> {
     try {
       const targetUrl = /^https?:\/\//i.test(url) ? url : `https://${url}`;
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab = await this.getActiveTab();
       if (tab && tab.id) {
         await chrome.tabs.update(tab.id, { url: targetUrl });
         this.showToast('Loading video in current window...');
       } else {
-        await chrome.tabs.create({ url: targetUrl });
+        await chrome.tabs.create({ windowId: tab?.windowId, url: targetUrl });
         this.showToast('Loading video...');
       }
     } catch (error) {
@@ -1476,7 +2007,7 @@ class SwiftJotPopup {
 
   private async insertFacebookLink(): Promise<void> {
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab = await this.getActiveTab();
       if (!tab || !tab.id) {
         this.showToast('No active tab found');
         return;
@@ -1601,12 +2132,12 @@ class SwiftJotPopup {
   private async openFacebookUrl(url: string): Promise<void> {
     try {
       const targetUrl = /^https?:\/\//i.test(url) ? url : `https://${url}`;
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab = await this.getActiveTab();
       if (tab && tab.id) {
         await chrome.tabs.update(tab.id, { url: targetUrl });
         this.showToast('Loading Facebook in current window...');
       } else {
-        await chrome.tabs.create({ url: targetUrl });
+        await chrome.tabs.create({ windowId: tab?.windowId, url: targetUrl });
         this.showToast('Loading Facebook...');
       }
     } catch (error) {
@@ -1616,7 +2147,7 @@ class SwiftJotPopup {
   }
 
   private async getCurrentMediaTime(): Promise<string | undefined> {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = await this.getActiveTab();
     if (!tab || !tab.id) return;
 
     const onYouTube = isYouTubeUrl(tab.url);
@@ -1873,7 +2404,7 @@ class SwiftJotPopup {
 
   private async seekVideo(timestamp: string): Promise<boolean> {
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab = await this.getActiveTab();
       if (!tab || !tab.id) {
         this.showToast('No active tab found');
         return false;
