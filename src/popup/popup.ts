@@ -76,14 +76,6 @@ function parseTimestampToSeconds(timestamp: string): number {
   return hours * 3600 + minutes * 60 + seconds + millis / 1000;
 }
 
-const TIMESTAMP_REGEX = /\b\d{2}:\d{2}:\d{2}\.\d{3}\b/g;
-
-function extractTimestamps(text: string): string[] {
-  const matches = text.match(TIMESTAMP_REGEX);
-  if (!matches) return [];
-  return Array.from(new Set(matches));
-}
-
 function getTimestampAtPosition(text: string, pos: number): string | null {
   const regex = /\b\d{2}:\d{2}:\d{2}\.\d{3}\b/g;
   let match: RegExpExecArray | null;
